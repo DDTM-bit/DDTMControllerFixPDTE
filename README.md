@@ -16,7 +16,7 @@ A lightweight, zero-latency proxy DLL that injects directly into the game's inpu
 ## Requirements
 
 * **DSFix Mod** must be installed.
-* **DualShock 3 Users:** Requires [DsHidMini](https://github.com/VigilanteNyan/DsHidMini) to function (not natively supported).
+* **DualShock 3 Users:** Requires DsHidMini to function (not natively supported).
 
 ---
 
