@@ -15,7 +15,8 @@ A lightweight, zero-latency proxy DLL that injects directly into the game's inpu
 
 ## Requirements
 
-* **DSFix Mod** must be installed.
+* **DSFix Mod** is recommended to be installed.
+* It works without DSFix also, you just rename the dll to "dinput8.dll"
 * **DualShock 3 Users:** Requires DsHidMini to function (not natively supported).
 
 ---
@@ -41,9 +42,7 @@ A lightweight, zero-latency proxy DLL that injects directly into the game's inpu
 
 Because this mod reads controller hardware natively, active controller translation software will cause **double inputs and glitches**.
 
-1. **Close External Software:** Fully exit **DS4Windows**, **DualSenseX**, or any other controller mapping tool before launching the game.
-2. **Steam Input:** If your controller is not detected in-game, try toggling **Steam Input** (disable/enable) and restarting the game.
-
+**Close External Software:** Fully exit **DS4Windows**, **DualSenseX**, **Disable Steam Input** or any other controller mapping tool before launching the game.
 ---
 
 ## Button Mapping & Configuration
