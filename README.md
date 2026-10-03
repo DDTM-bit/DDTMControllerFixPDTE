@@ -16,7 +16,7 @@ A lightweight, zero-latency proxy DLL that injects directly into the game's inpu
 ## Requirements
 
 * **DSFix Mod** is recommended to be installed.
-* It works without DSFix also, you just rename the dll to "dinput8.dll"
+* This also works without DSFix, you just rename the dll to "dinput8.dll"
 * **DualShock 3 Users:** Requires DsHidMini to function (not natively supported).
 
 ---
