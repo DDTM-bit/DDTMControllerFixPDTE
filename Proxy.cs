@@ -65,9 +65,9 @@ namespace PlayStationPDTEinputFix
         private static SDL.SDL_GameControllerAxis _ltAxis = SDL.SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_TRIGGERLEFT;
         private static SDL.SDL_GameControllerAxis _rtAxis = SDL.SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_TRIGGERRIGHT;
 
-        // --- New Modifiers ---
-        private static short _lsDeadzoneMinX = 4000, _lsDeadzoneMaxX = 32000, _lsDeadzoneMinY = 4000, _lsDeadzoneMaxY = 32000;
-        private static short _rsDeadzoneMinX = 4000, _rsDeadzoneMaxX = 32000, _rsDeadzoneMinY = 4000, _rsDeadzoneMaxY = 32000;
+        // --- New Modifiers (Updated for Radial Math) ---
+        private static short _lsDeadzoneMin = 4000, _lsDeadzoneMax = 32000;
+        private static short _rsDeadzoneMin = 2000, _rsDeadzoneMax = 32000;
         private static float _lsSensX = 1.0f, _lsSensY = 1.0f, _rsSensX = 1.0f, _rsSensY = 1.0f;
         private static short _ltDeadzone = 1000, _rtDeadzone = 1000;
         private static short _ltThreshold = 30000, _rtThreshold = 30000;
@@ -169,18 +169,14 @@ DPAD_LEFT = DPAD_LEFT
 DPAD_RIGHT = DPAD_RIGHT
 
 [Settings]
-# --- STICK DEADZONES ---
-# Deadzones range from 0 to 32767.
+# --- RADIAL STICK DEADZONES ---
+# Deadzones range from 0 to 32767. Mod uses circular radial calculations. The default settings (7000-22000) are recommended for this game.
 # Min Deadzones: Defines the inner resting area of the sticks. Raising this eliminates ""stick drift"".
-# Max Deadzones: Defines the outer boundary required to reach 100% input in the game. Lowering this means you reach full speed before the stick hits the edge.
-LS_DeadzoneMin_X = 4000
-LS_DeadzoneMax_X = 32000
-LS_DeadzoneMin_Y = 4000
-LS_DeadzoneMax_Y = 32000
-RS_DeadzoneMin_X = 2000
-RS_DeadzoneMax_X = 32000
-RS_DeadzoneMin_Y = 2000
-RS_DeadzoneMax_Y = 32000
+# Max Deadzones: Defines the outer boundary required to reach 100% input. Lower this if diagonals won't register a run state.
+LS_DeadzoneMin = 7000
+LS_DeadzoneMax = 22000
+RS_DeadzoneMin = 7000
+RS_DeadzoneMax = 22000
 
 # --- STICK SENSITIVITY ---
 # Applies a direct multiplier to stick output. 
@@ -254,16 +250,17 @@ Rumble_RightMotor = 1.0");
                 }
                 else if (inSettings)
                 {
-                    // Parse custom modifiers
-                    if (key == "LS_DEADZONEMIN_X") short.TryParse(val, out _lsDeadzoneMinX);
-                    if (key == "LS_DEADZONEMAX_X") short.TryParse(val, out _lsDeadzoneMaxX);
-                    if (key == "LS_DEADZONEMIN_Y") short.TryParse(val, out _lsDeadzoneMinY);
-                    if (key == "LS_DEADZONEMAX_Y") short.TryParse(val, out _lsDeadzoneMaxY);
+                    // Parse radial modifiers
+                    if (key == "LS_DEADZONEMIN") short.TryParse(val, out _lsDeadzoneMin);
+                    if (key == "LS_DEADZONEMAX") short.TryParse(val, out _lsDeadzoneMax);
+                    if (key == "RS_DEADZONEMIN") short.TryParse(val, out _rsDeadzoneMin);
+                    if (key == "RS_DEADZONEMAX") short.TryParse(val, out _rsDeadzoneMax);
 
-                    if (key == "RS_DEADZONEMIN_X") short.TryParse(val, out _rsDeadzoneMinX);
-                    if (key == "RS_DEADZONEMAX_X") short.TryParse(val, out _rsDeadzoneMaxX);
-                    if (key == "RS_DEADZONEMIN_Y") short.TryParse(val, out _rsDeadzoneMinY);
-                    if (key == "RS_DEADZONEMAX_Y") short.TryParse(val, out _rsDeadzoneMaxY);
+                    // For backwards compatibility in case users don't delete old INI file
+                    if (key == "LS_DEADZONEMIN_X") short.TryParse(val, out _lsDeadzoneMin);
+                    if (key == "LS_DEADZONEMAX_X") short.TryParse(val, out _lsDeadzoneMax);
+                    if (key == "RS_DEADZONEMIN_X") short.TryParse(val, out _rsDeadzoneMin);
+                    if (key == "RS_DEADZONEMAX_X") short.TryParse(val, out _rsDeadzoneMax);
 
                     if (key == "LS_SENSITIVITY_X") float.TryParse(val, out _lsSensX);
                     if (key == "LS_SENSITIVITY_Y") float.TryParse(val, out _lsSensY);
@@ -284,24 +281,46 @@ Rumble_RightMotor = 1.0");
         // ---------------------------------------------------------
         // Axis Math Helpers
         // ---------------------------------------------------------
-        private static short ApplyStickMath(short rawValue, short minDz, short maxDz, float sensitivity)
+
+        private static void ApplyRadialStickMath(
+            short rawX, short rawY,
+            short minDz, short maxDz,
+            float sensX, float sensY,
+            out short outX, out short outY)
         {
-            // Cast to 32-bit int to prevent OverflowException when rawValue is exactly -32768
-            int intRaw = rawValue;
-            int sign = Math.Sign(intRaw);
-            int absVal = Math.Abs(intRaw);
+            // Cast to double to prevent overflow and maintain decimal precision
+            double x = rawX;
+            double y = rawY;
+            double magnitude = Math.Sqrt((x * x) + (y * y));
 
-            if (absVal < minDz) return 0;
-
-            // Failsafe: if absVal exceeds maxDz, or if the user configured the INI incorrectly
-            if (absVal > maxDz || maxDz <= minDz) absVal = 32767;
-            else
+            // Inner Deadzone calculation
+            if (magnitude < minDz)
             {
-                float normalized = (float)(absVal - minDz) / (maxDz - minDz);
-                absVal = (int)(normalized * 32767 * sensitivity);
+                outX = 0;
+                outY = 0;
+                return;
             }
 
-            return (short)(sign * Math.Min(absVal, 32767));
+            // Failsafe if user configured INI incorrectly
+            if (maxDz <= minDz) maxDz = 32767;
+
+            // Normalize magnitude between the min and max limits
+            double normalizedMag = (magnitude - minDz) / (maxDz - minDz);
+
+            // Cap normalized magnitude at 1.0 so edge snapping behaves smoothly 
+            if (normalizedMag > 1.0) normalizedMag = 1.0;
+
+            // Find ratio of raw axes to total magnitude 
+            double ratioX = x / magnitude;
+            double ratioY = y / magnitude;
+
+            // Re-apply magnitude based on ratios, scale up to short.MaxValue, and multiply by sensitivity
+            double finalX = ratioX * normalizedMag * 32767 * sensX;
+            double finalY = ratioY * normalizedMag * 32767 * sensY;
+
+            // Clamp results securely between -32768 and 32767 to avoid XInput crashes
+            outX = (short)Math.Max(short.MinValue, Math.Min(short.MaxValue, finalX));
+            outY = (short)Math.Max(short.MinValue, Math.Min(short.MaxValue, finalY));
         }
 
         private static byte ApplyTriggerMath(short rawValue, short deadzone, short threshold)
@@ -449,10 +468,9 @@ Rumble_RightMotor = 1.0");
             state.Gamepad.bLeftTrigger = ApplyTriggerMath(rawLT, _ltDeadzone, _ltThreshold);
             state.Gamepad.bRightTrigger = ApplyTriggerMath(rawRT, _rtDeadzone, _rtThreshold);
 
-            state.Gamepad.sThumbLX = ApplyStickMath(rawLSX, _lsDeadzoneMinX, _lsDeadzoneMaxX, _lsSensX);
-            state.Gamepad.sThumbLY = ApplyStickMath(rawLSY, _lsDeadzoneMinY, _lsDeadzoneMaxY, _lsSensY);
-            state.Gamepad.sThumbRX = ApplyStickMath(rawRSX, _rsDeadzoneMinX, _rsDeadzoneMaxX, _rsSensX);
-            state.Gamepad.sThumbRY = ApplyStickMath(rawRSY, _rsDeadzoneMinY, _rsDeadzoneMaxY, _rsSensY);
+            // Process Radial Stick Math out to the struct parameters directly
+            ApplyRadialStickMath(rawLSX, rawLSY, _lsDeadzoneMin, _lsDeadzoneMax, _lsSensX, _lsSensY, out state.Gamepad.sThumbLX, out state.Gamepad.sThumbLY);
+            ApplyRadialStickMath(rawRSX, rawRSY, _rsDeadzoneMin, _rsDeadzoneMax, _rsSensX, _rsSensY, out state.Gamepad.sThumbRX, out state.Gamepad.sThumbRY);
 
             unsafe
             {
