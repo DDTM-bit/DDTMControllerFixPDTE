@@ -4,6 +4,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using MinHook;
 using SDL2;
+using System.Globalization;
 
 namespace PlayStationPDTEinputFix
 {
@@ -251,29 +252,31 @@ Rumble_RightMotor = 1.0");
                 else if (inSettings)
                 {
                     // Parse radial modifiers
-                    if (key == "LS_DEADZONEMIN") short.TryParse(val, out _lsDeadzoneMin);
-                    if (key == "LS_DEADZONEMAX") short.TryParse(val, out _lsDeadzoneMax);
-                    if (key == "RS_DEADZONEMIN") short.TryParse(val, out _rsDeadzoneMin);
-                    if (key == "RS_DEADZONEMAX") short.TryParse(val, out _rsDeadzoneMax);
+                    if (key == "LS_DEADZONEMIN") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _lsDeadzoneMin);
+                    if (key == "LS_DEADZONEMAX") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _lsDeadzoneMax);
+                    if (key == "RS_DEADZONEMIN") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _rsDeadzoneMin);
+                    if (key == "RS_DEADZONEMAX") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _rsDeadzoneMax);
 
-                    // For backwards compatibility in case users don't delete old INI file
-                    if (key == "LS_DEADZONEMIN_X") short.TryParse(val, out _lsDeadzoneMin);
-                    if (key == "LS_DEADZONEMAX_X") short.TryParse(val, out _lsDeadzoneMax);
-                    if (key == "RS_DEADZONEMIN_X") short.TryParse(val, out _rsDeadzoneMin);
-                    if (key == "RS_DEADZONEMAX_X") short.TryParse(val, out _rsDeadzoneMax);
+                    // For backwards compatibility
+                    if (key == "LS_DEADZONEMIN_X") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _lsDeadzoneMin);
+                    if (key == "LS_DEADZONEMAX_X") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _lsDeadzoneMax);
+                    if (key == "RS_DEADZONEMIN_X") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _rsDeadzoneMin);
+                    if (key == "RS_DEADZONEMAX_X") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _rsDeadzoneMax);
 
-                    if (key == "LS_SENSITIVITY_X") float.TryParse(val, out _lsSensX);
-                    if (key == "LS_SENSITIVITY_Y") float.TryParse(val, out _lsSensY);
-                    if (key == "RS_SENSITIVITY_X") float.TryParse(val, out _rsSensX);
-                    if (key == "RS_SENSITIVITY_Y") float.TryParse(val, out _rsSensY);
+                    // Fix the float parsing bug
+                    if (key == "LS_SENSITIVITY_X") float.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _lsSensX);
+                    if (key == "LS_SENSITIVITY_Y") float.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _lsSensY);
+                    if (key == "RS_SENSITIVITY_X") float.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _rsSensX);
+                    if (key == "RS_SENSITIVITY_Y") float.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _rsSensY);
 
-                    if (key == "LT_DEADZONE") short.TryParse(val, out _ltDeadzone);
-                    if (key == "RT_DEADZONE") short.TryParse(val, out _rtDeadzone);
-                    if (key == "LT_ACTIVATIONTHRESHOLD") short.TryParse(val, out _ltThreshold);
-                    if (key == "RT_ACTIVATIONTHRESHOLD") short.TryParse(val, out _rtThreshold);
+                    if (key == "LT_DEADZONE") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _ltDeadzone);
+                    if (key == "RT_DEADZONE") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _rtDeadzone);
+                    if (key == "LT_ACTIVATIONTHRESHOLD") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _ltThreshold);
+                    if (key == "RT_ACTIVATIONTHRESHOLD") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _rtThreshold);
 
-                    if (key == "RUMBLE_LEFTMOTOR") float.TryParse(val, out _rumbleLeft);
-                    if (key == "RUMBLE_RIGHTMOTOR") float.TryParse(val, out _rumbleRight);
+                    // Fix the float parsing bug for rumble too
+                    if (key == "RUMBLE_LEFTMOTOR") float.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _rumbleLeft);
+                    if (key == "RUMBLE_RIGHTMOTOR") float.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _rumbleRight);
                 }
             }
         }
