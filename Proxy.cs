@@ -48,6 +48,7 @@ namespace PlayStationPDTEinputFix
 
         private static bool _autoRunActive = false;
         private static bool _wasAutoRunBtnPressed = false;
+        private static int _autoRunBleedFrames = 0;
 
         // Replaced roll/jump and dash variables:
         private static int _jumpMacroStep = 0;
@@ -196,6 +197,7 @@ namespace PlayStationPDTEinputFix
 # - Standard/Xbox: A, B, X, Y, LB, RB, LT, RT, LS, RS, BACK, START, GUIDE
 # - Nintendo: SOUTH, EAST, WEST, NORTH, L, R, ZL, ZR, MINUS, PLUS
 # - D-Pad: DPAD_UP, DPAD_DOWN, DPAD_LEFT, DPAD_RIGHT
+# Leave as NONE to disable.
 
 A = CROSS
 B = CIRCLE
@@ -631,34 +633,56 @@ Rumble_RightMotor = 1.0");
             }
             _wasLeapBtnPressed = leapPressed;
 
-            // 3. AUTO RUN (Toggle sprint on movement)
+            // 3. AUTO RUN (Toggle sprint, cancels on stop or attack)
+            bool autoRunIsMoving = Math.Abs((int)rawLSX) > 8000 || Math.Abs((int)rawLSY) > 8000;
+            bool isAttacking = (state.Gamepad.wButtons & 0x0300) != 0 || state.Gamepad.bRightTrigger > 0 || state.Gamepad.bLeftTrigger > 0;
+
             if (autoRunPressed && !_wasAutoRunBtnPressed) _autoRunActive = !_autoRunActive;
+
             if (_autoRunActive)
             {
-                // Cast to int to prevent OverflowException crash on hard diagonals!
-                bool isMoving = Math.Abs((int)state.Gamepad.sThumbLX) > 8000 || Math.Abs((int)state.Gamepad.sThumbLY) > 8000;
-                if (isMoving)
+                if (!autoRunIsMoving || isAttacking)
                 {
-                    state.Gamepad.wButtons |= 0x2000; // Auto-hold B when moving
+                    // Cancel Auto-Run and start a safe release to prevent accidental rolling
+                    _autoRunActive = false;
+                    _autoRunBleedFrames = 1;
+                }
+                else
+                {
+                    state.Gamepad.wButtons |= 0x2000; // Hold B
+                }
+            }
+
+            // Safe Release: Trick the game into a micro-sprint when Auto-Run ends
+            if (!_autoRunActive && _autoRunBleedFrames > 0)
+            {
+                if (_autoRunBleedFrames < 32)
+                {
+                    state.Gamepad.wButtons |= 0x2000;
+                    _autoRunBleedFrames++;
+                }
+                else
+                {
+                    _autoRunBleedFrames = 0;
                 }
             }
             _wasAutoRunBtnPressed = autoRunPressed;
 
-            // 4. DASH SPRINT ONLY (Never rolls, never jumps)
-            // Cast to int to prevent OverflowException crash!
+
+            // 4. DASH SPRINT ONLY (Mashing fix)
             bool dashSprintIsMoving = Math.Abs((int)rawLSX) > 8000 || Math.Abs((int)rawLSY) > 8000;
 
             if (dashSprintPressed)
             {
-                // Anti-Jump logic: If pressed shortly after a release, zero the stick for 1 frame.
-                // This breaks the engine's "sprint-to-jump" combo and cleanly starts a new sprint.
-                if (!_wasDashSprintPressed && _dashSprintCooldown > 0)
+                // MASHING FIX: Drop stick momentum for 1 frame on EVERY fresh press. 
+                // This absolutely breaks the engine's jump/roll combo queue if the user spams the button.
+                if (!_wasDashSprintPressed)
                 {
                     state.Gamepad.sThumbLX = 0;
                     state.Gamepad.sThumbLY = 0;
                 }
 
-                state.Gamepad.wButtons |= 0x2000; // Hold B to sprint
+                state.Gamepad.wButtons |= 0x2000; // Hold B
 
                 if (dashSprintIsMoving || _dashSprintHoldFrames > 0)
                 {
@@ -666,23 +690,18 @@ Rumble_RightMotor = 1.0");
                     if (_dashSprintHoldFrames > 40) _dashSprintHoldFrames = 40;
                 }
 
-                _dashSprintCooldown = 0; // Reset cooldown while held
+                _dashSprintCooldown = 0;
             }
             else
             {
-                // Anti-Roll logic: Trick the game into a micro-sprint if released before 32 frames.
                 if (_dashSprintHoldFrames > 0 && _dashSprintHoldFrames < 32)
                 {
-                    state.Gamepad.wButtons |= 0x2000; // Keep holding B in the background
+                    state.Gamepad.wButtons |= 0x2000; // Safe release (micro-sprint)
                     _dashSprintHoldFrames++;
                 }
                 else
                 {
-                    // Safe to release. Start the jump-prevention cooldown (15 frames)
-                    if (_dashSprintHoldFrames >= 32 || _wasDashSprintPressed)
-                    {
-                        _dashSprintCooldown = 15;
-                    }
+                    if (_dashSprintHoldFrames >= 32 || _wasDashSprintPressed) _dashSprintCooldown = 15;
                     _dashSprintHoldFrames = 0;
                 }
 
