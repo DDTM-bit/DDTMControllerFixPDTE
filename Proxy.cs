@@ -13,6 +13,49 @@ namespace PlayStationPDTEinputFix
         //!!publish with developer cmd: dotnet publish DDTMControllerFix.csproj -c Release -r win-x86
 
         // ---------------------------------------------------------
+        // Macro Tracking Variables
+        // ---------------------------------------------------------
+        // ---------------------------------------------------------
+        // Macro Tracking Variables
+        // ---------------------------------------------------------
+        private class ComboBinding
+        {
+            public string ActionName = "";
+            public List<SDL.SDL_GameControllerButton> Buttons = new List<SDL.SDL_GameControllerButton>();
+            public List<SDL.SDL_GameControllerAxis> Axes = new List<SDL.SDL_GameControllerAxis>();
+
+            public bool IsPressed(IntPtr controller)
+            {
+                // All assigned buttons must be pressed
+                foreach (var btn in Buttons)
+                    if (SDL.SDL_GameControllerGetButton(controller, btn) == 0) return false;
+
+                // All assigned triggers must be pulled past a threshold (approx 50%)
+                foreach (var axis in Axes)
+                    if (SDL.SDL_GameControllerGetAxis(controller, axis) < 16000) return false;
+
+                return (Buttons.Count > 0 || Axes.Count > 0);
+            }
+        }
+
+        private static List<ComboBinding> _macros = new List<ComboBinding>();
+
+        private static int _kickMacroStep = 0;
+        private static bool _wasKickBtnPressed = false;
+
+        private static int _leapMacroStep = 0;
+        private static bool _wasLeapBtnPressed = false;
+
+        private static bool _autoRunActive = false;
+        private static bool _wasAutoRunBtnPressed = false;
+
+        private static int _rollJumpMacroStep = 0;
+        private static bool _wasRollBtnPressed = false;
+
+        private static int _dashOnlyHoldFrames = 0;
+
+
+        // ---------------------------------------------------------
         // 1. Strict Memory Layouts
         // ---------------------------------------------------------
         [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -169,6 +212,15 @@ DPAD_DOWN = DPAD_DOWN
 DPAD_LEFT = DPAD_LEFT
 DPAD_RIGHT = DPAD_RIGHT
 
+# --- NON-STANDARD BINDINGS ---
+# Map special macros to single buttons (e.g. L3) or combinations separated by '+' (e.g. B + RT).
+# Max of 3 combinations. Leave as NONE to disable.
+KICK = NONE
+LEAP_ATTACK = NONE
+AUTO_RUN = NONE
+ROLL_JUMP_ONLY = NONE
+DASH_ONLY = NONE
+
 [Settings]
 # --- RADIAL STICK DEADZONES ---
 # Deadzones range from 0 to 32767. Mod uses circular radial calculations. The default settings (7000-22000) are recommended for this game.
@@ -206,6 +258,7 @@ Rumble_RightMotor = 1.0");
             }
 
             _buttonMap.Clear();
+            _macros.Clear();
             string[] lines = File.ReadAllLines(iniPath);
             bool inBindings = false, inSettings = false;
 
@@ -229,6 +282,40 @@ Rumble_RightMotor = 1.0");
 
                 if (inBindings)
                 {
+                    // Catch Non-Standard Macros
+                    string[] specialKeys = { "KICK", "LEAP_ATTACK", "AUTO_RUN", "ROLL_JUMP_ONLY", "DASH_ONLY" };
+                    if (Array.Exists(specialKeys, k => k == key))
+                    {
+                        if (val == "NONE" || string.IsNullOrEmpty(val)) continue;
+
+                        ComboBinding combo = new ComboBinding { ActionName = key };
+                        string[] inputs = val.Split('+');
+
+                        // Enforce maximum of 3 combinations
+                        for (int i = 0; i < Math.Min(inputs.Length, 3); i++)
+                        {
+                            string input = inputs[i].Trim();
+
+                            // First check if the input is a trigger (Axis)
+                            var axis = ParsePhysicalAxis(input);
+                            if (axis != SDL.SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_INVALID)
+                            {
+                                combo.Axes.Add(axis);
+                                continue;
+                            }
+
+                            // Otherwise, check if it's a standard button
+                            var btn = ParsePhysicalButton(input);
+                            if (btn != SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_INVALID)
+                            {
+                                combo.Buttons.Add(btn);
+                            }
+                        }
+
+                        if (combo.Buttons.Count > 0 || combo.Axes.Count > 0) _macros.Add(combo);
+                        continue;
+                    }
+
                     if (key == "LT")
                     {
                         var axis = ParsePhysicalAxis(val);
@@ -474,6 +561,101 @@ Rumble_RightMotor = 1.0");
             // Process Radial Stick Math out to the struct parameters directly
             ApplyRadialStickMath(rawLSX, rawLSY, _lsDeadzoneMin, _lsDeadzoneMax, _lsSensX, _lsSensY, out state.Gamepad.sThumbLX, out state.Gamepad.sThumbLY);
             ApplyRadialStickMath(rawRSX, rawRSY, _rsDeadzoneMin, _rsDeadzoneMax, _rsSensX, _rsSensY, out state.Gamepad.sThumbRX, out state.Gamepad.sThumbRY);
+
+            // ---------------------------------------------------------
+            // Non-Standard Bindings Execution
+            // ---------------------------------------------------------
+            bool kickPressed = false, leapPressed = false, autoRunPressed = false, rollPressed = false, dashPressed = false;
+
+            foreach (var macro in _macros)
+            {
+                if (macro.IsPressed(_controller))
+                {
+                    switch (macro.ActionName)
+                    {
+                        case "KICK": kickPressed = true; break;
+                        case "LEAP_ATTACK": leapPressed = true; break;
+                        case "AUTO_RUN": autoRunPressed = true; break;
+                        case "ROLL_JUMP_ONLY": rollPressed = true; break;
+                        case "DASH_ONLY": dashPressed = true; break;
+                    }
+                }
+            }
+
+            // 1. KICK (Frame-perfect Flick + RB)
+            if (kickPressed && !_wasKickBtnPressed) _kickMacroStep = 1;
+            if (_kickMacroStep > 0)
+            {
+                if (_kickMacroStep == 1)
+                {
+                    state.Gamepad.sThumbLX = 0; state.Gamepad.sThumbLY = 0; // Drop stick to neutral            
+                    state.Gamepad.wButtons &= unchecked((ushort)~0x0200); // Release RB
+                    _kickMacroStep++;
+                }
+                else if (_kickMacroStep >= 2 && _kickMacroStep <= 4)
+                {
+                    state.Gamepad.sThumbLX = 0; state.Gamepad.sThumbLY = 32767; // Slam forward
+                    state.Gamepad.wButtons |= 0x0200; // Press RB
+                    _kickMacroStep++;
+                }
+                else _kickMacroStep = 0;
+            }
+            _wasKickBtnPressed = kickPressed;
+
+            // 2. LEAP ATTACK (Frame-perfect Flick + RT)
+            if (leapPressed && !_wasLeapBtnPressed) _leapMacroStep = 1;
+            if (_leapMacroStep > 0)
+            {
+                if (_leapMacroStep == 1)
+                {
+                    state.Gamepad.sThumbLX = 0; state.Gamepad.sThumbLY = 0;
+                    state.Gamepad.bRightTrigger = 0; // Release RT
+                    _leapMacroStep++;
+                }
+                else if (_leapMacroStep >= 2 && _leapMacroStep <= 4)
+                {
+                    state.Gamepad.sThumbLX = 0; state.Gamepad.sThumbLY = 32767;
+                    state.Gamepad.bRightTrigger = 255; // Press RT
+                    _leapMacroStep++;
+                }
+                else _leapMacroStep = 0;
+            }
+            _wasLeapBtnPressed = leapPressed;
+
+            // 3. AUTO RUN (Toggle stick fully forward)
+            if (autoRunPressed && !_wasAutoRunBtnPressed) _autoRunActive = !_autoRunActive;
+            if (_autoRunActive)
+            {
+                // Auto-cancel if the player significantly pulls the stick back or sideways
+                if (rawLSY < -10000 || Math.Abs(rawLSX) > 20000) _autoRunActive = false;
+                else state.Gamepad.sThumbLY = 32767;
+            }
+            _wasAutoRunBtnPressed = autoRunPressed;
+
+            // 4. ROLL / JUMP ONLY (Guaranteed 2-frame tap)
+            if (rollPressed && !_wasRollBtnPressed) _rollJumpMacroStep = 1;
+            if (_rollJumpMacroStep > 0)
+            {
+                if (_rollJumpMacroStep <= 2)
+                {
+                    state.Gamepad.wButtons |= 0x2000;
+                    _rollJumpMacroStep++;
+                }
+                else if (!rollPressed) _rollJumpMacroStep = 0;
+            }
+            _wasRollBtnPressed = rollPressed;
+
+            // 5. DASH ONLY (Prevents accidental rolling)
+            if (dashPressed)
+            {
+                state.Gamepad.wButtons |= 0x2000;
+                _dashOnlyHoldFrames = 25;
+            }
+            else if (_dashOnlyHoldFrames > 0)
+            {
+                state.Gamepad.wButtons |= 0x2000;
+                _dashOnlyHoldFrames--;
+            }
 
             unsafe
             {
