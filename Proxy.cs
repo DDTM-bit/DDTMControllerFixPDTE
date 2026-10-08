@@ -49,10 +49,13 @@ namespace PlayStationPDTEinputFix
         private static bool _autoRunActive = false;
         private static bool _wasAutoRunBtnPressed = false;
 
-        private static int _rollJumpMacroStep = 0;
-        private static bool _wasRollBtnPressed = false;
+        // Replaced roll/jump and dash variables:
+        private static int _jumpMacroStep = 0;
+        private static bool _wasJumpPressed = false;
 
-        private static int _dashOnlyHoldFrames = 0;
+        private static int _dashSprintHoldFrames = 0;
+        private static int _dashSprintCooldown = 0;
+        private static bool _wasDashSprintPressed = false;
 
 
         // ---------------------------------------------------------
@@ -214,12 +217,18 @@ DPAD_RIGHT = DPAD_RIGHT
 
 # --- NON-STANDARD BINDINGS ---
 # Map special macros to single buttons (e.g. L3) or combinations separated by '+' (e.g. B + RT).
-# Max of 3 combinations. Leave as NONE to disable.
+# KICK: Instantly performs a kick.
+# LEAP_ATTACK: Instantly performs a jumping heavy attack.
+# AUTO_RUN: Toggles auto-sprint. When active, moving the stick automatically holds sprint (B).
+# JUMP_ONLY: Instantly executes a jump (Note: character must already be sprinting, otherwise DS1 engine forces a roll).
+# DASH_SPRINT_ONLY: Hold to sprint. Quick taps are converted into micro-sprints to completely prevent accidental rolls.
+# Max is 3 combinations. Leave as NONE to disable.
+
 KICK = NONE
 LEAP_ATTACK = NONE
 AUTO_RUN = NONE
-ROLL_JUMP_ONLY = NONE
-DASH_ONLY = NONE
+JUMP_ONLY = NONE
+DASH_SPRINT_ONLY = NONE
 
 [Settings]
 # --- RADIAL STICK DEADZONES ---
@@ -283,7 +292,7 @@ Rumble_RightMotor = 1.0");
                 if (inBindings)
                 {
                     // Catch Non-Standard Macros
-                    string[] specialKeys = { "KICK", "LEAP_ATTACK", "AUTO_RUN", "ROLL_JUMP_ONLY", "DASH_ONLY" };
+                    string[] specialKeys = { "KICK", "LEAP_ATTACK", "AUTO_RUN", "JUMP_ONLY", "DASH_SPRINT_ONLY" };
                     if (Array.Exists(specialKeys, k => k == key))
                     {
                         if (val == "NONE" || string.IsNullOrEmpty(val)) continue;
@@ -565,7 +574,7 @@ Rumble_RightMotor = 1.0");
             // ---------------------------------------------------------
             // Non-Standard Bindings Execution
             // ---------------------------------------------------------
-            bool kickPressed = false, leapPressed = false, autoRunPressed = false, rollPressed = false, dashPressed = false;
+            bool kickPressed = false, leapPressed = false, autoRunPressed = false, jumpPressed = false, dashSprintPressed = false;
 
             foreach (var macro in _macros)
             {
@@ -576,8 +585,8 @@ Rumble_RightMotor = 1.0");
                         case "KICK": kickPressed = true; break;
                         case "LEAP_ATTACK": leapPressed = true; break;
                         case "AUTO_RUN": autoRunPressed = true; break;
-                        case "ROLL_JUMP_ONLY": rollPressed = true; break;
-                        case "DASH_ONLY": dashPressed = true; break;
+                        case "JUMP_ONLY": jumpPressed = true; break;
+                        case "DASH_SPRINT_ONLY": dashSprintPressed = true; break;
                     }
                 }
             }
@@ -622,40 +631,89 @@ Rumble_RightMotor = 1.0");
             }
             _wasLeapBtnPressed = leapPressed;
 
-            // 3. AUTO RUN (Toggle stick fully forward)
+            // 3. AUTO RUN (Toggle sprint on movement)
             if (autoRunPressed && !_wasAutoRunBtnPressed) _autoRunActive = !_autoRunActive;
             if (_autoRunActive)
             {
-                // Auto-cancel if the player significantly pulls the stick back or sideways
-                if (rawLSY < -10000 || Math.Abs(rawLSX) > 20000) _autoRunActive = false;
-                else state.Gamepad.sThumbLY = 32767;
+                // Cast to int to prevent OverflowException crash on hard diagonals!
+                bool isMoving = Math.Abs((int)state.Gamepad.sThumbLX) > 8000 || Math.Abs((int)state.Gamepad.sThumbLY) > 8000;
+                if (isMoving)
+                {
+                    state.Gamepad.wButtons |= 0x2000; // Auto-hold B when moving
+                }
             }
             _wasAutoRunBtnPressed = autoRunPressed;
 
-            // 4. ROLL / JUMP ONLY (Guaranteed 2-frame tap)
-            if (rollPressed && !_wasRollBtnPressed) _rollJumpMacroStep = 1;
-            if (_rollJumpMacroStep > 0)
-            {
-                if (_rollJumpMacroStep <= 2)
-                {
-                    state.Gamepad.wButtons |= 0x2000;
-                    _rollJumpMacroStep++;
-                }
-                else if (!rollPressed) _rollJumpMacroStep = 0;
-            }
-            _wasRollBtnPressed = rollPressed;
+            // 4. DASH SPRINT ONLY (Never rolls, never jumps)
+            // Cast to int to prevent OverflowException crash!
+            bool dashSprintIsMoving = Math.Abs((int)rawLSX) > 8000 || Math.Abs((int)rawLSY) > 8000;
 
-            // 5. DASH ONLY (Prevents accidental rolling)
-            if (dashPressed)
+            if (dashSprintPressed)
             {
-                state.Gamepad.wButtons |= 0x2000;
-                _dashOnlyHoldFrames = 25;
+                // Anti-Jump logic: If pressed shortly after a release, zero the stick for 1 frame.
+                // This breaks the engine's "sprint-to-jump" combo and cleanly starts a new sprint.
+                if (!_wasDashSprintPressed && _dashSprintCooldown > 0)
+                {
+                    state.Gamepad.sThumbLX = 0;
+                    state.Gamepad.sThumbLY = 0;
+                }
+
+                state.Gamepad.wButtons |= 0x2000; // Hold B to sprint
+
+                if (dashSprintIsMoving || _dashSprintHoldFrames > 0)
+                {
+                    _dashSprintHoldFrames++;
+                    if (_dashSprintHoldFrames > 40) _dashSprintHoldFrames = 40;
+                }
+
+                _dashSprintCooldown = 0; // Reset cooldown while held
             }
-            else if (_dashOnlyHoldFrames > 0)
+            else
             {
-                state.Gamepad.wButtons |= 0x2000;
-                _dashOnlyHoldFrames--;
+                // Anti-Roll logic: Trick the game into a micro-sprint if released before 32 frames.
+                if (_dashSprintHoldFrames > 0 && _dashSprintHoldFrames < 32)
+                {
+                    state.Gamepad.wButtons |= 0x2000; // Keep holding B in the background
+                    _dashSprintHoldFrames++;
+                }
+                else
+                {
+                    // Safe to release. Start the jump-prevention cooldown (15 frames)
+                    if (_dashSprintHoldFrames >= 32 || _wasDashSprintPressed)
+                    {
+                        _dashSprintCooldown = 15;
+                    }
+                    _dashSprintHoldFrames = 0;
+                }
+
+                if (_dashSprintCooldown > 0) _dashSprintCooldown--;
             }
+            _wasDashSprintPressed = dashSprintPressed;
+
+
+            // 5. JUMP ONLY (Evaluated LAST so it can override Dash Sprint!)
+            if (jumpPressed && !_wasJumpPressed) _jumpMacroStep = 1;
+            if (_jumpMacroStep > 0)
+            {
+                if (_jumpMacroStep >= 1 && _jumpMacroStep <= 3)
+                {
+                    // Frames 1-3: Force release the B button. 
+                    // Because this runs after Dash Sprint, it successfully overrides the sprint hold!
+                    state.Gamepad.wButtons &= unchecked((ushort)~0x2000);
+                    _jumpMacroStep++;
+                }
+                else if (_jumpMacroStep >= 4 && _jumpMacroStep <= 7)
+                {
+                    // Frames 4-7: Tap the B button to execute the jump.
+                    state.Gamepad.wButtons |= 0x2000;
+                    _jumpMacroStep++;
+                }
+                else if (!jumpPressed)
+                {
+                    _jumpMacroStep = 0;
+                }
+            }
+            _wasJumpPressed = jumpPressed;
 
             unsafe
             {
