@@ -430,8 +430,6 @@ namespace PlayStationPDTEinputFix
 #   Your roll button can no longer jump by accident. CROSS keeps its normal
 #   job, so menus still work: standing still it just interacts, and it only
 #   jumps while you are holding the stick in a direction.
-#   Same warning as above - CROSS is also Interact, so a jump next to a lever
-#   or item can set that thing off.
 #
 # ---------------------------------------------------------------------------
 #   RUN_AND_ATTACK    Vanilla movement, better attacks
