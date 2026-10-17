@@ -205,6 +205,47 @@ namespace PlayStationPDTEinputFix
                 target = Math.Min(ms, max);
         }
 
+        // Behaviour settings are read from ANY section, exactly like Preset.
+        // They used to be read only inside [Settings], but the generated file lists
+        // them next to the macros under [Bindings], so they were silently ignored and
+        // the defaults were used instead. That made a hand-written setup behave
+        // differently from the preset that sets the same values in code.
+        // None of these names is a valid binding or stick setting, so there is no
+        // risk of a clash. Returns true when the line was consumed.
+        private static bool TryParseBehaviourSetting(string key, string val)
+        {
+            switch (key)
+            {
+                case "PRESET":
+                    _preset = val;
+                    return true;
+
+                case "SUPPRESSMACROBUTTONS":
+                    _suppressMacroButtons = ParseBool(val);
+                    return true;
+
+                case "AUTORUN_CANCELONSTOP":
+                    _autoRunCancelOnStop = ParseBool(val);
+                    return true;
+
+                case "MUTE_JUMP_FROM_B":
+                    _muteJumpFromB = ParseBool(val);
+                    return true;
+
+                // Advanced overrides. SafeRelease_Ms is the old name for RunState_Ms
+                // and is still accepted so older INIs keep working.
+                case "RUNSTATE_MS":
+                case "SAFERELEASE_MS":
+                    ParseMs(val, ref _runStateMs, 3000);
+                    return true;
+
+                case "JUMPGUARD_MS":
+                    ParseMs(val, ref _jumpGuardMs, 2000);
+                    return true;
+            }
+            return false;
+        }
+
         // Builds one macro from an action name and an input string such as
         // "L3" or "R1 + L3". Shared by the [Bindings] parser and the presets.
         private static void AddMacro(string action, string value)
@@ -384,41 +425,54 @@ namespace PlayStationPDTEinputFix
 # ===========================================================================
 #  1. PRESET  -  START HERE
 # ===========================================================================
-# A preset sets up the macros AND the behaviour switches that go with them, in
-# one go. Presets never change your button mapping in section 2, so your
-# controller layout (including the Japanese layout) is always kept.
+# A preset is just a shortcut. Each one sets the SAME lines you could type in
+# yourself further down this file - nothing more. The exact lines are listed
+# under each preset, so you can copy them and tweak from there.
 #
-# A preset overrides the macro lines in section 2 and settings in
-# section 3.
-# To build your own setup instead, leave this on NONE.
+# Presets never change your button mapping, so your controller layout
+# (including the Japanese layout) is always kept.
+#
+# While a preset is set, it REPLACES the macro lines and the four macro
+# behaviour lines in section 2. To edit anything yourself, set Preset = NONE
+# and write the lines you want.
 #
 # Choose ONE:
 #
 # ---------------------------------------------------------------------------
 #   NONE
 # ---------------------------------------------------------------------------
-#   Vanilla controls, no macros. You still get the controller support,
-#   deadzones, sensitivity and rumble fixes.
+#   Your own settings from section 2 are used, whatever they are.
+#   With the macros left at NONE this is vanilla controls: you still get the
+#   controller support, deadzones, sensitivity and rumble fixes.
 #
 # ---------------------------------------------------------------------------
 #   DS3_JUMP          Jump on its own button, like Dark Souls 3
 # ---------------------------------------------------------------------------
-#     L3  = jump
+#     L3 = jump
 #   Your roll button can no longer jump by accident, so the only jumps you get
 #   are the ones you pressed L3 for. Rolling, sprinting, backstepping and
 #   Cancel all behave exactly as normal.
 #   The simplest preset, and the one that changes the least.
+#     Same as:  JUMP_ONLY = L3
+#               MUTE_JUMP_FROM_B = TRUE
+#               SuppressMacroButtons = TRUE
 #
 # ---------------------------------------------------------------------------
-#   MORTAL_SHELL      Sprint moved onto CROSS
+#   MORTAL_SHELL      A second sprint button on CROSS
 # ---------------------------------------------------------------------------
 #     CROSS      = hold to sprint
 #     L3         = toggle auto-run
 #     CROSS + R1 = kick
 #     CROSS + R2 = leaping attack
-#   Adds a second sprint button on CROSS, so you can run without touching the
-#   roll button. CIRCLE is left exactly as the game made it and still rolls,
-#   sprints and jumps as normal. CROSS keeps its normal job too, so menus work.
+#   Lets you run without touching the roll button. CIRCLE is left exactly as
+#   the game made it and still rolls, sprints and jumps as normal. CROSS keeps
+#   its normal job too, so it still confirms in menus and interacts in game.
+#     Same as:  AUTO_RUN = L3
+#               DASH_SPRINT_ONLY = CROSS
+#               KICK = CROSS + R1
+#               LEAP_ATTACK = CROSS + R2
+#               SuppressMacroButtons = FALSE
+#               AutoRun_CancelOnStop = TRUE
 #
 # ---------------------------------------------------------------------------
 #   ELDEN_RING        Jump on CROSS, like Elden Ring
@@ -430,6 +484,13 @@ namespace PlayStationPDTEinputFix
 #   Your roll button can no longer jump by accident. CROSS keeps its normal
 #   job, so menus still work: standing still it just interacts, and it only
 #   jumps while you are holding the stick in a direction.
+#     Same as:  JUMP_ONLY = CROSS
+#               KICK = CROSS + R1
+#               LEAP_ATTACK = CROSS + R2
+#               AUTO_RUN = L3
+#               MUTE_JUMP_FROM_B = TRUE
+#               SuppressMacroButtons = FALSE
+#               AutoRun_CancelOnStop = TRUE
 #
 # ---------------------------------------------------------------------------
 #   RUN_AND_ATTACK    Vanilla movement, better attacks
@@ -441,8 +502,12 @@ namespace PlayStationPDTEinputFix
 #   Adds only the auto-run for long runbacks and reliable kicks and leaping
 #   attacks, with no stick flick needed.
 #   The safest choice if you do not want your movement touched at all.
+#     Same as:  AUTO_RUN = L3
+#               KICK = CIRCLE + R1
+#               LEAP_ATTACK = CIRCLE + R2
+#               MUTE_JUMP_FROM_B = FALSE
+#               SuppressMacroButtons = TRUE
 # ---------------------------------------------------------------------------
-
 Preset = NONE
 
 
@@ -509,7 +574,10 @@ DPAD_RIGHT = DPAD_RIGHT
 #                     it does nothing standing still, because the game has no
 #                     standing jump. Instant while already sprinting, with a
 #                     short wind-up from a walk.
-
+#
+# If you put a macro on CROSS, CIRCLE, SQUARE or TRIANGLE, also set
+# SuppressMacroButtons = FALSE below, or that button stops working in the
+# menus and stops interacting in game.
 
 KICK = NONE
 LEAP_ATTACK = NONE
@@ -518,18 +586,38 @@ DASH_SPRINT_ONLY = NONE
 ROLL_ONLY = NONE
 JUMP_ONLY = NONE
 
-# --- MACRO BEHAVIOUR ---
+# --- MACRO BEHAVIOUR (ignored while a preset is set) ---
+
+# SuppressMacroButtons
+# THE IMPORTANT ONE. Decides what happens to a button you gave a macro to.
+#   TRUE  the button ONLY does the macro. Its normal job is taken away, so a
+#         macro on CROSS would stop CROSS confirming in menus and interacting
+#         with levers, doors and items.
+#   FALSE the button does the macro AND its normal job. Use this whenever you
+#         put a macro on CROSS, CIRCLE, SQUARE or TRIANGLE, or you will lose
+#         that button in the menus.
+# Combinations like 'CROSS + R1' are never affected either way.
+SuppressMacroButtons = TRUE
+
 # AutoRun_CancelOnStop
 #   TRUE  auto-sprint switches off once you let the stick go, so moving again
 #         walks. Press the button again to turn it back on.
 #   FALSE it stays on until you press the button, attack, or open a menu.
 AutoRun_CancelOnStop = TRUE
 
-# SuppressMacroButtons
-#   TRUE  a button used by a single-button macro stops sending its normal
-#         input, so you do not get both at once. Combinations are unaffected.
-#   FALSE the button sends the macro AND its normal input.
-SuppressMacroButtons = TRUE
+# MUTE_JUMP_FROM_B
+# The game has no jump button. A jump is 'let go of the run button while you
+# are running, then press it again straight away'. That is easy to do by
+# accident when you are repositioning, and it has killed a lot of characters.
+#   TRUE  your normal roll/sprint button can no longer jump. Everything else
+#         it does is untouched: tap to roll, hold to sprint, backstep standing
+#         still, Cancel in menus. Only a press that lands immediately after a
+#         sprint is swallowed, and only for the length of JumpGuard_Ms.
+#   FALSE the button behaves exactly as the game made it, jumps included.
+# This does NOT disable the JUMP_ONLY macro. If you want to keep jumping, set
+# this to TRUE and put JUMP_ONLY on a button of its own, so the only jumps you
+# ever get are the ones you asked for.
+MUTE_JUMP_FROM_B = FALSE
 
 # ===========================================================================
 #  3. STICKS, TRIGGERS AND RUMBLE
@@ -569,20 +657,6 @@ RT_ActivationThreshold = 30000
 # Left is heavy impacts, right is light feedback.
 Rumble_LeftMotor = 1.0
 Rumble_RightMotor = 1.0
-
-# MUTE_JUMP_FROM_B
-# The game has no jump button. A jump is 'let go of the run button while you are
-# running, then press it again straight away'. That is easy to do by accident
-# when you are repositioning, and it has killed a lot of characters.
-#   TRUE  your normal roll/sprint button can no longer jump. Everything else it
-#         does is untouched: tap to roll, hold to sprint, backstep standing
-#         still, Cancel in menus. Only a press that lands immediately after a
-#         sprint is swallowed, and only for the length of JumpGuard_Ms.
-#   FALSE the button behaves exactly as the game made it, jumps included.
-# This does NOT disable the JUMP_ONLY macro. If you want to keep jumping, set
-# this to TRUE and put JUMP_ONLY on a button of its own, so the only jumps you
-# ever get are the ones you asked for.
-MUTE_JUMP_FROM_B = FALSE
 
 
 # ===========================================================================
@@ -632,12 +706,9 @@ MUTE_JUMP_FROM_B = FALSE
                 string key = parts[0].Trim().ToUpper();
                 string val = parts[1].Trim().ToUpper();
 
-                // Accepted from any section, so a stray Preset line still works.
-                if (key == "PRESET")
-                {
-                    _preset = val;
-                    continue;
-                }
+                // Preset and the macro behaviour switches are accepted from any
+                // section, so it never matters where in the file they are written.
+                if (TryParseBehaviourSetting(key, val)) continue;
 
                 if (inBindings)
                 {
@@ -694,15 +765,8 @@ MUTE_JUMP_FROM_B = FALSE
                     if (key == "LT_ACTIVATIONTHRESHOLD") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _ltThreshold);
                     if (key == "RT_ACTIVATIONTHRESHOLD") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _rtThreshold);
 
-                    // Macro behaviour
-                    if (key == "SUPPRESSMACROBUTTONS") _suppressMacroButtons = ParseBool(val);
-                    if (key == "AUTORUN_CANCELONSTOP") _autoRunCancelOnStop = ParseBool(val);
-                    if (key == "MUTE_JUMP_FROM_B") _muteJumpFromB = ParseBool(val);
-
-                    // Advanced overrides. SafeRelease_Ms is the old name for
-                    // RunState_Ms and is still accepted so older INIs keep working.
-                    if (key == "RUNSTATE_MS" || key == "SAFERELEASE_MS") ParseMs(val, ref _runStateMs, 3000);
-                    if (key == "JUMPGUARD_MS") ParseMs(val, ref _jumpGuardMs, 2000);
+                    // Macro behaviour and the advanced overrides are handled by
+                    // TryParseBehaviourSetting above, from any section.
 
                     // Fix the float parsing bug for rumble too
                     if (key == "RUMBLE_LEFTMOTOR") float.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _rumbleLeft);
