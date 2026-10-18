@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -47,6 +47,28 @@ namespace PlayStationPDTEinputFix
         private const uint STICK_SUSTAIN_MS = 250;       // tolerate this much neutral stick mid-sprint
         private const uint JUMP_GAP_MS = 60;             // jump: B released so the following tap registers
         private const uint JUMP_TAP_MS = 120;            // jump: the tap itself
+
+        // DASH_SPRINT_ONLY only: the stick must be pushed ALL THE WAY before this
+        // macro may press B.
+        //
+        // A half-way threshold was tried first and was not reliable. In this game
+        // 'walking' covers the whole analog range, so any middle value sits inside
+        // the speeds a player calls walking: sometimes above it, sometimes below,
+        // which is why it muted at some walking speeds and backstepped at others.
+        // Full push is the only unambiguous signal.
+        //
+        // 97 rather than 100 is deliberate slack. A physical stick rarely reports a
+        // perfect maximum, especially on diagonals and on a worn controller, so an
+        // exact 100 could make the macro impossible to trigger.
+        //
+        // Measured against the usable range between the two deadzones, so 'all the
+        // way' means the point where the game is already receiving full speed. On the
+        // default 7000-22000 that is reached before the stick hits its physical stop,
+        // which is correct: past that point pushing harder does nothing anyway.
+        //
+        // Deliberately NOT applied to the other macros: AUTO_RUN, ROLL_ONLY and
+        // JUMP_ONLY were all tested as they are.
+        private const double DASH_STICK_MIN_PERCENT = 97.0;
 
         // ---------------------------------------------------------
         // Macro Tracking Variables
@@ -194,6 +216,22 @@ namespace PlayStationPDTEinputFix
         private static bool _muteJumpFromB = false;
         private static string _preset = "NONE";
 
+        // ---------------------------------------------------------
+        // Optional diagnostic log. Off unless DebugLog = TRUE in the INI, and it
+        // only ever writes when the B button changes state, so it is a few lines per
+        // action rather than one per frame. Every write is wrapped in try/catch: a
+        // logging problem must never affect the controller.
+        // ---------------------------------------------------------
+        private static bool _debugLog = false;
+        private const string LOG_PATH = "DDTMControllerFix_log.txt";
+
+        private static void Log(string message)
+        {
+            if (!_debugLog) return;
+            try { File.AppendAllText(LOG_PATH, message + Environment.NewLine); }
+            catch { /* a log must never break input */ }
+        }
+
         private static bool ParseBool(string val)
         {
             return val == "TRUE" || val == "1" || val == "YES" || val == "ON";
@@ -230,6 +268,10 @@ namespace PlayStationPDTEinputFix
 
                 case "MUTE_JUMP_FROM_B":
                     _muteJumpFromB = ParseBool(val);
+                    return true;
+
+                case "DEBUGLOG":
+                    _debugLog = ParseBool(val);
                     return true;
 
                 // Advanced overrides. SafeRelease_Ms is the old name for RunState_Ms
@@ -567,7 +609,9 @@ DPAD_RIGHT = DPAD_RIGHT
 #   AUTO_RUN          Toggle auto-sprint. Push the stick and you run on your
 #                     own. Switches off when you stop, attack or open a menu.
 #   DASH_SPRINT_ONLY  Hold to sprint. Taps can never roll, and pressing it
-#                     again right after cannot jump.
+#                     again right after cannot jump. Needs the stick pushed ALL
+#                     THE WAY: standing still, or at any walking speed, it does
+#                     nothing at all. Push the stick fully and it sprints.
 #   ROLL_ONLY         Always rolls, never sprints, however long you hold it.
 #                     Standing still it backsteps, as the game normally does.
 #   JUMP_ONLY         Jump. You must be holding the stick in a direction;
@@ -676,7 +720,15 @@ Rumble_RightMotor = 1.0
 # so the game leaves the run state and your next press sprints instead of
 # jumping. Raise it if mashing sprint still jumps. Lower it if sprinting feels
 # slow to start again after you let go.
-# JumpGuard_Ms = 500");
+# JumpGuard_Ms = 500
+
+# DebugLog: TRUE writes a file called DDTMControllerFix_log.txt next to the game,
+# recording every press and release of the roll/sprint button with the stick
+# reading at that moment. Only for reporting a problem - leave it FALSE normally.
+# The file is appended to, so delete it before a test run.
+DebugLog = FALSE
+"
+);
             }
 
             _buttonMap.Clear();
@@ -833,6 +885,24 @@ Rumble_RightMotor = 1.0
             // Clamp results securely between -32768 and 32767 to avoid XInput crashes
             outX = (short)Math.Max(short.MinValue, Math.Min(short.MaxValue, finalX));
             outY = (short)Math.Max(short.MinValue, Math.Min(short.MaxValue, finalY));
+        }
+
+        // How far a stick is pushed, 0-100%, across the usable range between the two
+        // deadzones. This is the same 'normalised magnitude' ApplyRadialStickMath
+        // computes, taken before the sensitivity multiplier, so it describes thumb
+        // position only. It follows the deadzone settings: raising LS_DeadzoneMax
+        // means a longer physical push for the same percentage.
+        private static double StickPushPercent(short rawX, short rawY, short minDz, short maxDz)
+        {
+            double magnitude = Math.Sqrt(((double)rawX * rawX) + ((double)rawY * rawY));
+            if (magnitude < minDz) return 0.0;
+
+            // Same failsafe as the radial math, for an INI with max below min.
+            int max = (maxDz <= minDz) ? 32767 : maxDz;
+
+            double normalized = (magnitude - minDz) / (max - minDz);
+            if (normalized > 1.0) normalized = 1.0;
+            return normalized * 100.0;
         }
 
         private static byte ApplyTriggerMath(short rawValue, short deadzone, short threshold)
@@ -1001,6 +1071,17 @@ Rumble_RightMotor = 1.0
             // Whether the GAME sees movement, measured after the deadzone is applied.
             bool stickLive = state.Gamepad.sThumbLX != 0 || state.Gamepad.sThumbLY != 0;
 
+            // How far the left stick is pushed, 0-100% across the usable range between
+            // LS_DeadzoneMin and LS_DeadzoneMax. Used ONLY by DASH_SPRINT_ONLY below;
+            // every other macro still uses stickLive.
+            //
+            // Measured BEFORE the sensitivity multiplier on purpose. Sensitivity scales
+            // how fast the character moves, not how far your thumb has moved, and
+            // reading it after the multiplier meant LS_Sensitivity below 0.5 could
+            // never reach 50% at all, which would have disabled this macro outright.
+            double stickPush = StickPushPercent(rawLSX, rawLSY, _lsDeadzoneMin, _lsDeadzoneMax);
+            bool stickPushedHard = stickPush >= DASH_STICK_MIN_PERCENT;
+
             // ---------------------------------------------------------
             // Non-Standard Bindings Execution
             // ---------------------------------------------------------
@@ -1162,7 +1243,14 @@ Rumble_RightMotor = 1.0
                     _dashBleeding = false;
                 }
 
-                if (stickLive)
+                // Starting a sprint needs a real push (DASH_STICK_MIN_PERCENT), but
+                // once it is running any movement keeps it alive. The two different
+                // thresholds are deliberate: without that hysteresis, easing the stick
+                // across the boundary mid-run would drop and retake B, and that
+                // release-then-press is exactly the engine's jump input.
+                bool dashStickOk = _dashEngaged ? stickLive : stickPushedHard;
+
+                if (dashStickOk)
                 {
                     _dashEngaged = true;
                     _dashNeutralSince = 0;
@@ -1173,8 +1261,8 @@ Rumble_RightMotor = 1.0
                     if (_nowMs - _dashNeutralSince >= STICK_SUSTAIN_MS) _dashEngaged = false;
                 }
 
-                // Pressing this with a neutral stick does nothing at all now. Holding B
-                // while standing still only ever produces a backstep on release.
+                // Pressing this while standing still, or at a slow walk, does nothing
+                // at all. A short B press at those speeds is read as a backstep.
                 if (_dashEngaged) wantSprint = true;
             }
             else
@@ -1284,6 +1372,30 @@ Rumble_RightMotor = 1.0
             // is exempt because its own ramp/gap/tap pattern needs the release.
             // ---------------------------------------------------------
             bool bNow = (state.Gamepad.wButtons & MASK_B) != 0;
+
+            // Diagnostic log: record both edges of every B press, whatever produced
+            // it, with the stick reading at that moment. A backstep is a short B press
+            // at low stick, so the two lines around it say exactly what happened.
+            if (_debugLog && bNow != _bHeldLast)
+            {
+                string who = (dashSprintPressed ? "dash " : "")
+                           + (_autoRunEngaged ? "autorun " : "")
+                           + (_rollActive ? "roll " : "")
+                           + (_jumpActive ? "jump " : "")
+                           + (physicalB ? "button " : "")
+                           + (_dashBleeding ? "bleed " : "");
+                if (who.Length == 0) who = "none ";
+
+                if (bNow)
+                {
+                    Log($"[{_nowMs}] B DOWN  push={stickPush:F0}% live={stickLive} from={who.Trim()}");
+                }
+                else
+                {
+                    Log($"[{_nowMs}] B UP    push={stickPush:F0}% held={_nowMs - _bHoldStartMs}ms"
+                        + $" moved={_bHoldWasMoving} from={who.Trim()}");
+                }
+            }
 
             if (bNow && !_bHeldLast)
             {
