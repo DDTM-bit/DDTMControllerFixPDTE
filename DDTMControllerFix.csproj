@@ -1,5 +1,4 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
     <TargetFramework>net9.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -13,6 +12,10 @@
   <ItemGroup>
     <PackageReference Include="MinHook.NET" Version="1.1.2" />
     <PackageReference Include="ppy.SDL2-CS" Version="1.0.741-alpha" />
+	  <!-- Mouse cursor pictures, built into the dll. Replace a file and rebuild to change the cursor. -->
+	  <EmbeddedResource Include="resources\cursor_1080p.png" LogicalName="cursor_1080p.png" />
+	  <EmbeddedResource Include="resources\cursor_1440p.png" LogicalName="cursor_1440p.png" />
+	  <EmbeddedResource Include="resources\cursor_2160p.png" LogicalName="cursor_2160p.png" />
   </ItemGroup>
 
 </Project>

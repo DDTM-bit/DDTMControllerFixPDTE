@@ -970,6 +970,7 @@ DebugLog = FALSE
                     VirtualProtect(enumDevicesAddr, (UIntPtr)IntPtr.Size, oldProtect, out _);
                 }
             }
+            KeyboardMouse.OnDirectInputCreated(hr, ppvOut); // keyboard + mouse (KbmCore.cs)
             return hr;
         }
 
@@ -1021,7 +1022,8 @@ DebugLog = FALSE
                         break;
                     }
                 }
-                if (_controller == IntPtr.Zero) return 1167;
+                // No controller: the keyboard + mouse pad is given to the game instead (KbmCore.cs).
+                if (_controller == IntPtr.Zero) return KeyboardMouse.PollWithoutController(pState);
             }
 
             // One clock sample per poll, shared by every macro below.
@@ -1418,6 +1420,9 @@ DebugLog = FALSE
             }
             _bHeldLast = bNow;
 
+            // Keyboard + mouse are mixed in last, after every controller macro (KbmCore.cs).
+            KeyboardMouse.PollWithController(ref state.Gamepad);
+
             // XInput contract: dwPacketNumber changes ONLY when the pad state changes.
             // Stamping it with the clock every poll told the game the pad changed on
             // every single frame, which can upset input edge detection.
@@ -1442,4 +1447,4 @@ DebugLog = FALSE
             return 0;
         }
     }
-}
+}

@@ -5,7 +5,7 @@ A lightweight, zero-latency proxy DLL that injects directly into the game's inpu
 ---
 
 ## Features
-
+* **Keyboard & Mouse advanced support** if you turn the HUD off in the game options, also disable HUD mod in DSfix.ini, or mouse clicks land in the wrong place.
 * **True Universal Support:** Works out of the box with Xbox (XInput), PlayStation (DualSense, DS4), Nintendo Switch Pro, and generic controllers (Wired & Wireless).
 * **Zero Input Lag:** Bypasses standard Windows input layers for direct, hardware-level polling via SDL2.
 * **No External Software Needed:** Play directly without running DS4Windows, DualSenseX, or Steam Input in the background.
@@ -33,9 +33,7 @@ A lightweight, zero-latency proxy DLL that injects directly into the game's inpu
      ```
    * Save and close `DSfix.ini`.
 
-> **Note for Keyboard & Mouse / Other Input Mods:** If you are chaining another input mod, set `dinput8dllWrapper` to target that mod's DLL instead.  
-> **Hide Mouse Cursor:** Set `disableCursor 1` in `DSfix.ini`.
-
+* **Keyboard & Mouse:** Play with keyboard + mouse, together with the controller at any time. Smooth 1:1 mouse camera, custom cursor, and key bindings (combos of two keys) in the `[Keyboard]` / `[Mouse]` sections of `DDTMControllerMappings.ini`. The game's own keyboard settings are not used.
 ---
 
 ## Important Requirements (Read Before Playing)
