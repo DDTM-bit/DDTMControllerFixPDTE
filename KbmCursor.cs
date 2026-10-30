@@ -33,6 +33,7 @@ namespace PlayStationPDTEinputFix
         [DllImport("user32.dll")] private static extern int PostMessageW(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
         [DllImport("user32.dll")] private static extern int GetClientRect(IntPtr hwnd, int* rect);
         [DllImport("user32.dll")] private static extern int ClientToScreen(IntPtr hwnd, int* point);
+        [DllImport("user32.dll")] private static extern int ScreenToClient(IntPtr hwnd, int* point);
         [DllImport("user32.dll")] private static extern int SetCursorPos(int x, int y);
         [DllImport("user32.dll")] private static extern int GetCursorPos(int* point);
         [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(long point);
@@ -53,6 +54,14 @@ namespace PlayStationPDTEinputFix
         private static volatile IntPtr _hCursor;
         private static IntPtr _oldWndProc, _subclassed;
         private static bool _lastWasKbm = true, _wasMenuShown;
+        // Where the cursor was when the last menu closed (client coordinates). In game the hidden cursor is kept
+        // near the middle of the window, so without this every menu would start with the cursor in the middle.
+        private static bool _hasMenuCursorPos;
+        private static int _menuCursorX, _menuCursorY;
+        // Between two windows (e.g. bonfire menu -> level up -> bonfire menu) the game shows no menu for a moment.
+        // The cursor is only hidden when no menu is back after this long, so it never blinks between windows.
+        private const long MENU_HIDE_DELAY_MS = 200;
+        private static long _menuGoneSince;
         private static bool _counterFixedGame, _counterFixedWindow;
         private static string _cursorName = "";
         private static long _nextSizeCheck;
@@ -78,6 +87,34 @@ namespace PlayStationPDTEinputFix
             else if (kbmUsed) _lastWasKbm = true;
 
             bool menuShown = menuOrLoading && !loading;
+            if (menuShown) _menuGoneSince = 0;
+            else if (_wasMenuShown)
+            {
+                if (_menuGoneSince == 0) _menuGoneSince = _now;
+                if (_now - _menuGoneSince < MENU_HIDE_DELAY_MS) menuShown = true;   // maybe only between two windows
+            }
+            if (_focused && menuShown != _wasMenuShown)
+            {
+                int* pt = stackalloc int[2];
+                if (!menuShown)
+                {
+                    // a menu closes: remember where its cursor was
+                    if (GetCursorPos(pt) != 0 && ScreenToClient(_hwnd, pt) != 0)
+                    {
+                        _menuCursorX = pt[0]; _menuCursorY = pt[1]; _hasMenuCursorPos = true;
+                    }
+                }
+                else if (_hasMenuCursorPos)
+                {
+                    // a menu opens: the cursor goes back where it was in the last menu (if still inside the window)
+                    int* r = stackalloc int[4];
+                    if (GetClientRect(_hwnd, r) != 0 && _menuCursorX >= 0 && _menuCursorY >= 0 && _menuCursorX < r[2] && _menuCursorY < r[3])
+                    {
+                        pt[0] = _menuCursorX; pt[1] = _menuCursorY;
+                        if (ClientToScreen(_hwnd, pt) != 0) SetCursorPos(pt[0], pt[1]);
+                    }
+                }
+            }
             bool vis;
             if (!menuShown) vis = false;
             else if (!_wasMenuShown) vis = _lastWasKbm;          // a menu just opened

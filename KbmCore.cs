@@ -361,6 +361,11 @@ namespace PlayStationPDTEinputFix
         private static readonly byte[] _keepMenuKeys = { 0xC8, 0xD0, 0xCB, 0xCD, 0x1C, 0x9C, 0x0E };   // arrows, ENTER, numpad ENTER, BACKSPACE
         private static readonly byte[] _keepAimKeys = { 0xC8, 0xD0 };                                   // arrow up / down = zoom
         private const int DIK_UP = 0xC8, DIK_DOWN = 0xD0;
+        // A key that was held while the game's keys were hidden (in game) reaches the game only after it was let go:
+        // otherwise, when a menu or dialog opens while it is still held, the game sees a new press. (ENTER on "Offer
+        // Humanity": between the talk list and the "Offer humanity?" dialog there is a moment with no menu, and the
+        // still-held ENTER answered the dialog at once.)
+        private static readonly bool[] _keyWaitUp = new bool[256];
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
         private static int HookGetDeviceState(IntPtr self, uint cb, byte* data)
@@ -374,7 +379,19 @@ namespace PlayStationPDTEinputFix
                     byte[] keep = (_phase == Phase.Menu || _phase == Phase.Loading) ? _keepMenuKeys
                                 : _phase == Phase.Aim ? _keepAimKeys : Array.Empty<byte>();
                     byte* saved = stackalloc byte[8];
-                    for (int i = 0; i < keep.Length; i++) saved[i] = data[keep[i]];
+                    for (int i = 0; i < keep.Length; i++)
+                    {
+                        int k = keep[i];
+                        if ((data[k] & 0x80) == 0) _keyWaitUp[k] = false;     // let go: it may reach the game again
+                        saved[i] = _keyWaitUp[k] ? (byte)0 : data[k];
+                    }
+                    // the menu keys that are hidden now and held: they wait for their release
+                    if (keep.Length != _keepMenuKeys.Length)
+                        for (int i = 0; i < _keepMenuKeys.Length; i++)
+                        {
+                            int k = _keepMenuKeys[i];
+                            if ((data[k] & 0x80) != 0 && Array.IndexOf(keep, (byte)k) < 0) _keyWaitUp[k] = true;
+                        }
                     new Span<byte>(data, 256).Clear();
                     for (int i = 0; i < keep.Length; i++) data[keep[i]] = saved[i];
                     if (_phase == Phase.Aim)
@@ -439,10 +456,22 @@ namespace PlayStationPDTEinputFix
         private const uint MENU_QUICK = 0x40;   // IsShowMenu bit of the quick (START) menu, also set while its sub-menus are open
         private static long _nextEquipRead;
         private static int _stance, _leftWeapon = -1, _rightWeapon = -1;
-        // IsShowMenu bit of the hint messages (e.g. the tutorial texts, MenuMan+0x98). The game lets the player
-        // move while they show, so on its own it counts as "in game", not as a menu. (0x8 is the YES/NO
-        // confirmation window, which needs the cursor: it stays a menu.)
-        private const uint MENU_NOTIFY = 0x800;
+        // The game's own rule: its "can the player act" checks test the open-menu mask with 0x7FFFF77F, so only
+        // the hint messages (0x800, e.g. the tutorial texts, MenuMan+0x98) and the free message state (0x80,
+        // MenuMan+0x40 = 4: "Used Dungeon Cell Key", parts of NPC dialogue) let the player move. Those count as
+        // "in game" here too. Everything else is a menu: the menu keys work and the game's own keys (arrows, ENTER,
+        // BACKSPACE) reach it. The movement keys move the hero in every menu too (the game allows it, as with the
+        // controller's left stick).
+        // A message box alone (bit 0x8 with dialog type 9 or 0 at MenuMan+0x60, the types the game itself treats as
+        // plain messages: "It's locked / OK", "Used Dungeon Cell Key") is a menu for the keys, but without the cursor.
+        // The other dialogs (the number picker "Offer humanity?", the YES/NO questions) and a dialog over a menu (e.g.
+        // the bonfire menu) keep the cursor.
+        private const uint MENU_BLOCKING = 0x7FFFF77F, MENU_DIALOG = 0x8;
+        private static bool _dialogAlone;
+        // NPC dialogue (subtitles) in talk state 1 (bit 0x80000, MenuMan+0x40 = 1): a menu for the keys, but nothing
+        // can be clicked, so the cursor hides.
+        private const uint MENU_TALK_1 = 0x80000;
+        private static bool _npcTalk;
 
         private static bool IsBowOrCrossbow(int id) => id >= 1200000 && id < 1300000;
 
@@ -472,12 +501,20 @@ namespace PlayStationPDTEinputFix
             int stance = _stance, left = _leftWeapon, right = _rightWeapon;
             bool lockOn = player != 0 && (RdU8(player + PI_LOCK) & 1) != 0;
 
+            uint blocking = menuMask & MENU_BLOCKING;
+            int dialogType = blocking == MENU_DIALOG && menuMan != 0 ? RdI32(menuMan + 0x60) : -1;
+            _dialogAlone = dialogType == 9 || dialogType == 0;
+
             Phase p;
             if (loading >= 1 && loading <= 4) p = Phase.Loading;
-            else if (player == 0 || (menuMask & ~MENU_NOTIFY) != 0) p = Phase.Menu;
+            else if (player == 0 || blocking != 0) p = Phase.Menu;
             else if (camMode >= 1 && camMode <= 3) p = Phase.Aim;
             else if (stance != 1 && (IsBowOrCrossbow(left) || IsBowOrCrossbow(right))) p = Phase.BowReady;
             else p = Phase.Gameplay;
+
+            // NPC dialogue only (no other menu open): no cursor
+            bool talk = blocking == MENU_TALK_1 && menuMan != 0 && RdI32(menuMan + 0x40) == 1;
+            _npcTalk = talk;
 
             _phase = p;
             _menuMask = menuMask;
@@ -547,6 +584,7 @@ namespace PlayStationPDTEinputFix
                 {
                     _configLoaded = true;
                     LoadKeyboardConfig();
+                    FillSharedCells();   // the prompt keys for DSfix (KbmShared.cs)
                     var keys = new HashSet<int> { 0x1B };   // ESC (goes back in menus)
                     foreach (var bd in _bindings)
                     {
@@ -616,7 +654,8 @@ namespace PlayStationPDTEinputFix
                 BuildKeyboardPad(menu, forcedMouse);
                 CameraFromMouse(menu);
 
-                UpdateCursor(menu, _phase == Phase.Loading, mouseMoved || _down[IN_MOUSE_LEFT] || _down[IN_MOUSE_RIGHT], kbmUsed || mouseMoved, controllerUsed);
+                UpdateCursor(menu && !_npcTalk && !_dialogAlone, _phase == Phase.Loading, mouseMoved || _down[IN_MOUSE_LEFT] || _down[IN_MOUSE_RIGHT], kbmUsed || mouseMoved, controllerUsed);
+                UpdateShared(hasController, controllerUsed, kbmUsed || mouseMoved, menu, menuTabs);   // for DSfix (KbmShared.cs)
 
                 Array.Copy(_act, _actPrev, _act.Length);
 
@@ -666,6 +705,19 @@ namespace PlayStationPDTEinputFix
         private static bool Act_(Act a) => _act[(int)a];
         private static bool Pressed(Act a) => _act[(int)a] && !_actPrev[(int)a];
 
+        // The movement keys as the left stick (WALK = half way). Returns true while moving.
+        private static bool MoveStick(ref Proxy.XINPUT_GAMEPAD k)
+        {
+            int mx = (Act_(Act.MoveRight) ? 1 : 0) - (Act_(Act.MoveLeft) ? 1 : 0);
+            int my = (Act_(Act.MoveForward) ? 1 : 0) - (Act_(Act.MoveBackward) ? 1 : 0);
+            if (mx == 0 && my == 0) return false;
+            double mag = Act_(Act.Walk) ? WALK_STICK : 32767.0;
+            double len = Math.Sqrt(mx * mx + my * my);
+            k.sThumbLX = (short)Math.Round(mx / len * mag);
+            k.sThumbLY = (short)Math.Round(my / len * mag);
+            return true;
+        }
+
         private static void BuildKeyboardPad(bool menu, bool forcedMouse)
         {
             Proxy.XINPUT_GAMEPAD k = default;
@@ -686,6 +738,8 @@ namespace PlayStationPDTEinputFix
                 if (Act_(Act.TwoHand)) k.wButtons |= MASK_Y;
                 if (Act_(Act.Menu)) k.wButtons |= MASK_START;
                 if (Act_(Act.Gestures)) k.wButtons |= MASK_BACK;
+                // the hero can walk while a menu is open (not on the title screen, where there is no hero)
+                if (!title) MoveStick(ref k);
                 _bHeldLast = false; _guardArmed = false; _jumpActive = false;
                 _sprintOn = false; _sprintEngaged = false; _kickActive = false; _leapActive = false;
                 _flickLeft.Clear(); _flickRight.Clear();
@@ -695,16 +749,7 @@ namespace PlayStationPDTEinputFix
 
 
             // ---- movement ----
-            int mx = (Act_(Act.MoveRight) ? 1 : 0) - (Act_(Act.MoveLeft) ? 1 : 0);
-            int my = (Act_(Act.MoveForward) ? 1 : 0) - (Act_(Act.MoveBackward) ? 1 : 0);
-            bool moving = mx != 0 || my != 0;
-            if (moving)
-            {
-                double mag = Act_(Act.Walk) ? WALK_STICK : 32767.0;
-                double len = Math.Sqrt(mx * mx + my * my);
-                k.sThumbLX = (short)Math.Round(mx / len * mag);
-                k.sThumbLY = (short)Math.Round(my / len * mag);
-            }
+            bool moving = MoveStick(ref k);
 
             // ---- plain buttons ----
             if (Act_(Act.SwitchLeftWeapon)) k.wButtons |= MASK_DPAD_LEFT;

@@ -95,9 +95,11 @@ namespace PlayStationPDTEinputFix
             }
         }
 
-        // Actions still used inside menus: the A / B / X / Y / START / BACK equivalents.
+        // Actions still used inside menus: the A / B / X / Y / START / BACK equivalents, and the movement keys
+        // (the hero can walk while a menu is open).
         private static bool MenuAction(Act a) =>
-            a == Act.Dash || a == Act.Interact || a == Act.UseItem || a == Act.TwoHand || a == Act.Menu || a == Act.Gestures;
+            a == Act.Dash || a == Act.Interact || a == Act.UseItem || a == Act.TwoHand || a == Act.Menu || a == Act.Gestures ||
+            a == Act.MoveForward || a == Act.MoveBackward || a == Act.MoveLeft || a == Act.MoveRight || a == Act.Walk;
 
         private struct Binding
         {
@@ -108,7 +110,7 @@ namespace PlayStationPDTEinputFix
         private static readonly List<Binding> _bindings = new List<Binding>();
 
         // [Mouse] settings
-        private static float _sensX = 1.0f, _sensY = 1.0f, _bowSensX = 1.0f, _bowSensY = 1.0f;
+        private static float _sensX = 1.0f, _sensY = 1.0f, _bowSensX = 0.5f, _bowSensY = 0.5f;   // as in DEFAULT_SECTION
         private static bool _invertX, _invertY;
 
         // -----------------------------------------------------------------------------
@@ -228,8 +230,7 @@ Invert_Y = FALSE
             (Act.LightAttack, "MOUSE_LEFT"), (Act.HeavyAttack, "MOUSE_RIGHT"), (Act.Block, "LCTRL"), (Act.Parry, "Q"),
             (Act.Interact, "E"), (Act.UseItem, "R"), (Act.TwoHand, "T"), (Act.Menu, "TAB"), (Act.Gestures, "G"),
             (Act.LockOn, "MOUSE_MIDDLE"), (Act.NextTarget, "MOUSE_WHEEL_DOWN"), (Act.PreviousTarget, "MOUSE_WHEEL_UP"),
-            (Act.DashSprintOnly, "LSHIFT"),
-            (Act.MenuLeft, "Q"), (Act.MenuRight, "E"),
+            (Act.MenuLeft, "A"), (Act.MenuRight, "D"),   // DASH_SPRINT_ONLY, KICK, LEAP_ATTACK: NONE
         };
 
         private static void LoadKeyboardConfig()
