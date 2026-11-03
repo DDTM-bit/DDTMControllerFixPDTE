@@ -65,30 +65,39 @@ namespace PlayStationPDTEinputFix
             LightAttack, HeavyAttack, Block, Parry,
             Interact, UseItem, TwoHand, Menu, Gestures,
             LockOn, NextTarget, PreviousTarget,
-            DashSprintOnly, Kick, LeapAttack,
+            AutoRun, DashSprintOnly, RollOnly, Kick, LeapAttack,
             MenuLeft, MenuRight,
             Count
         }
 
         private static readonly string[] _actNames =
         {
-            "MOVE_FORWARD", "MOVE_BACKWARD", "MOVE_LEFT", "MOVE_RIGHT", "WALK", "DASH_ROLL_BACKSTEP", "JUMP",
+            "MOVE_FORWARD", "MOVE_BACKWARD", "MOVE_LEFT", "MOVE_RIGHT", "WALK", "DASH_ROLL_BACKSTEP_JUMP", "JUMP",
             "SWITCH_LEFT_WEAPON", "SWITCH_RIGHT_WEAPON", "SWITCH_ITEM", "SWITCH_MAGIC",
             "LIGHT_ATTACK", "HEAVY_ATTACK", "BLOCK", "PARRY",
             "INTERACT", "USE_ITEM", "TWO_HAND", "MENU", "GESTURES",
             "LOCK_ON", "NEXT_TARGET", "PREVIOUS_TARGET",
-            "DASH_SPRINT_ONLY", "KICK", "LEAP_ATTACK",
+            "AUTO_RUN_KEY", "DASH_SPRINT_ONLY_KEY", "ROLL_ONLY_KEY", "KICK", "LEAP_ATTACK",
             "MENU_LEFT", "MENU_RIGHT"
         };
+
+        private static int FindActionIndex(string key) => Array.IndexOf(_actNames, key);
 
         // Actions that may only use ONE key (no combination).
         private static bool SingleKeyOnly(Act a)
         {
             switch (a)
             {
-                case Act.SwitchLeftWeapon: case Act.SwitchRightWeapon: case Act.SwitchItem: case Act.SwitchMagic:
-                case Act.LightAttack: case Act.HeavyAttack: case Act.Block: case Act.Parry:
-                case Act.Kick: case Act.LeapAttack:
+                case Act.SwitchLeftWeapon:
+                case Act.SwitchRightWeapon:
+                case Act.SwitchItem:
+                case Act.SwitchMagic:
+                case Act.LightAttack:
+                case Act.HeavyAttack:
+                case Act.Block:
+                case Act.Parry:
+                case Act.Kick:
+                case Act.LeapAttack:
                     return false;
                 default:
                     return true;
@@ -109,15 +118,18 @@ namespace PlayStationPDTEinputFix
 
         private static readonly List<Binding> _bindings = new List<Binding>();
 
+        // [Keyboard] behaviour settings
+        private static bool _muteJumpFromKey = true;
+
         // [Mouse] settings
         private static float _sensX = 1.0f, _sensY = 1.0f, _bowSensX = 0.5f, _bowSensY = 0.5f;   // as in DEFAULT_SECTION
         private static bool _invertX, _invertY;
 
         // -----------------------------------------------------------------------------
-        // The default [Keyboard] / [Mouse] text. Appended to DDTMControllerMappings.ini
-        // when the file has no [Keyboard] section yet (new file or an older file).
+        // The default [Keyboard] / [Mouse] text. Written by Proxy.LoadConfig as the end
+        // of a new DDTMControllerMappings.ini, after the controller sections.
         // -----------------------------------------------------------------------------
-        private const string DEFAULT_SECTION =
+        internal const string DEFAULT_SECTION =
 @"
 
 # ===========================================================================
@@ -153,7 +165,7 @@ namespace PlayStationPDTEinputFix
 #   Mouse        MOUSE_LEFT, MOUSE_RIGHT, MOUSE_MIDDLE, MOUSE_4, MOUSE_5,
 #                MOUSE_WHEEL_UP, MOUSE_WHEEL_DOWN
 #
-# In menus: only INTERACT, DASH_ROLL_BACKSTEP, USE_ITEM, TWO_HAND, MENU,
+# In menus: only INTERACT, DASH_ROLL_BACKSTEP_JUMP, USE_ITEM, TWO_HAND, MENU,
 # GESTURES, MENU_LEFT and MENU_RIGHT work, and the mouse works as in the
 # normal game. These keys always work in menus, whatever is set here:
 #   ENTER = confirm, BACKSPACE = back, ARROW KEYS = move through the items,
@@ -165,36 +177,11 @@ namespace PlayStationPDTEinputFix
 # the mouse wheel zooms.
 [Keyboard]
 
-# One key only:
+#============One key only============
 MOVE_FORWARD = W
 MOVE_BACKWARD = S
 MOVE_LEFT = A
 MOVE_RIGHT = D
-# Hold together with a movement key to walk.
-WALK = LALT
-# Roll, backstep, hold to sprint. It never jumps.
-DASH_ROLL_BACKSTEP = SPACE
-# Jumps while moving.
-JUMP = F
-# Press once to sprint while moving. It stops when you stop moving, attack
-# or open a menu. It never rolls or jumps.
-DASH_SPRINT_ONLY = NONE
-
-# One key or a combination of two:
-SWITCH_LEFT_WEAPON = 1
-SWITCH_RIGHT_WEAPON = 2
-SWITCH_ITEM = 3
-SWITCH_MAGIC = 4
-LIGHT_ATTACK = MOUSE_LEFT
-HEAVY_ATTACK = MOUSE_RIGHT
-BLOCK = LCTRL
-PARRY = Q
-# Instant kick and instant jumping heavy attack (no flick needed),
-# for example KICK = X  or  KICK = LALT + MOUSE_LEFT
-KICK = NONE
-LEAP_ATTACK = NONE
-
-# One key only:
 INTERACT = E
 USE_ITEM = R
 TWO_HAND = T
@@ -203,12 +190,50 @@ GESTURES = G
 LOCK_ON = MOUSE_MIDDLE
 NEXT_TARGET = MOUSE_WHEEL_DOWN
 PREVIOUS_TARGET = MOUSE_WHEEL_UP
+WALK = LALT
+DASH_ROLL_BACKSTEP_JUMP = SPACE
+
+# TRUE = DASH_ROLL_BACKSTEP_JUMP can no longer jump by accident (use JUMP instead).
+# FALSE = DASH_ROLL_BACKSTEP_JUMP behaves as in the normal game, jumps included.
+MUTE_JUMP_FROM_Key = TRUE
+
+# Jumps while moving.
+JUMP = F
+
+# =====One key or a combination of two=====
+SWITCH_LEFT_WEAPON = 1
+SWITCH_RIGHT_WEAPON = 2
+SWITCH_ITEM = 3
+SWITCH_MAGIC = 4
+LIGHT_ATTACK = MOUSE_LEFT
+HEAVY_ATTACK = MOUSE_RIGHT
+BLOCK = LCTRL
+PARRY = Q
+
+# ============Special commands===========
+# Hold to sprint while moving (not walking). Taps can never roll, and pressing
+# it again right after cannot jump. Standing still or walking it does nothing.
+DASH_SPRINT_ONLY_Key = LSHIFT
+
+# Toggle auto-sprint: press once to sprint while moving. It stops when you
+# stop moving, attack or open a menu. It never rolls or jumps.
+AUTO_RUN_Key = NONE
+
+# Always rolls, never sprints, however long you hold it. Standing still it
+# backsteps, as the game normally does.
+ROLL_ONLY_Key = NONE
+
+# Instant kick and instant jumping heavy attack (no flick needed),
+# for example KICK = X  or  KICK = LALT + MOUSE_LEFT
+KICK = NONE
+LEAP_ATTACK = NONE
 
 # Only in the quick menu and the menus opened from it (inventory,
 # equipment, status...): change the tab, like LB / RB on the controller.
 # There these keys do nothing else; in the game they keep their normal job.
-MENU_LEFT = A
-MENU_RIGHT = D
+MENU_LEFT = COMMA
+MENU_RIGHT = PERIOD
+
 
 [Mouse]
 # 1.0 = normal. 2.0 = twice as fast. 0.5 = half speed.
@@ -222,39 +247,19 @@ Invert_X = FALSE
 Invert_Y = FALSE
 ";
 
-        private static readonly (Act, string)[] _defaults =
-        {
-            (Act.MoveForward, "W"), (Act.MoveBackward, "S"), (Act.MoveLeft, "A"), (Act.MoveRight, "D"),
-            (Act.Walk, "LALT"), (Act.Dash, "SPACE"), (Act.Jump, "F"),
-            (Act.SwitchLeftWeapon, "1"), (Act.SwitchRightWeapon, "2"), (Act.SwitchItem, "3"), (Act.SwitchMagic, "4"),
-            (Act.LightAttack, "MOUSE_LEFT"), (Act.HeavyAttack, "MOUSE_RIGHT"), (Act.Block, "LCTRL"), (Act.Parry, "Q"),
-            (Act.Interact, "E"), (Act.UseItem, "R"), (Act.TwoHand, "T"), (Act.Menu, "TAB"), (Act.Gestures, "G"),
-            (Act.LockOn, "MOUSE_MIDDLE"), (Act.NextTarget, "MOUSE_WHEEL_DOWN"), (Act.PreviousTarget, "MOUSE_WHEEL_UP"),
-            (Act.MenuLeft, "A"), (Act.MenuRight, "D"),   // DASH_SPRINT_ONLY, KICK, LEAP_ATTACK: NONE
-        };
-
         private static void LoadKeyboardConfig()
         {
             const string iniPath = "DDTMControllerMappings.ini";
             _bindings.Clear();
+            _muteJumpFromKey = true;
             string[] lines = Array.Empty<string>();
             try
             {
                 if (File.Exists(iniPath)) lines = File.ReadAllLines(iniPath);
-                bool hasSection = false;
-                foreach (string l in lines)
-                    if (l.Trim().Equals("[Keyboard]", StringComparison.OrdinalIgnoreCase)) { hasSection = true; break; }
-
-                if (!hasSection)
-                {
-                    File.AppendAllText(iniPath, DEFAULT_SECTION.Replace("\r\n", "\n").Replace("\n", "\r\n"));
-                    Log("ini: no [Keyboard] section found, the default keyboard and mouse section was added");
-                    lines = File.ReadAllLines(iniPath);
-                }
             }
-            catch (Exception e) { Log("ini: could not read or write the file (" + e.Message + "), using defaults"); }
+            catch (Exception e) { Log("ini: could not read the file (" + e.Message + ")"); }
 
-            bool inKeyboard = false, inMouse = false, sawKeyboard = false, debugLog = false;
+            bool inKeyboard = false, inMouse = false, debugLog = false;
             foreach (string raw in lines)
             {
                 string line = raw.Trim();
@@ -265,7 +270,6 @@ Invert_Y = FALSE
                 {
                     inKeyboard = line.Equals("[Keyboard]", StringComparison.OrdinalIgnoreCase);
                     inMouse = line.Equals("[Mouse]", StringComparison.OrdinalIgnoreCase);
-                    sawKeyboard |= inKeyboard;
                     continue;
                 }
                 int eq = line.IndexOf('=');
@@ -275,7 +279,12 @@ Invert_Y = FALSE
 
                 if (inKeyboard)
                 {
-                    int a = Array.IndexOf(_actNames, key);
+                    if (key == "MUTE_JUMP_FROM_KEY")
+                    {
+                        _muteJumpFromKey = ParseOn(val);
+                        continue;
+                    }
+                    int a = FindActionIndex(key);
                     if (a < 0) { Log($"ini: unknown keyboard action '{key}' ignored"); continue; }
                     AddBinding((Act)a, val);
                 }
@@ -293,12 +302,9 @@ Invert_Y = FALSE
                 }
             }
 
-            if (!sawKeyboard)
-                foreach (var (act, keys) in _defaults) AddBinding(act, keys);
-
             SetLogEnabled(debugLog);
 
-            Log($"ini: {_bindings.Count} keyboard/mouse bindings, sensitivity {_sensX}/{_sensY}, bow {_bowSensX}/{_bowSensY}, invert X={_invertX} Y={_invertY}");
+            Log($"ini: {_bindings.Count} keyboard/mouse bindings, muteJump={_muteJumpFromKey}, sensitivity {_sensX}/{_sensY}, bow {_bowSensX}/{_bowSensY}, invert X={_invertX} Y={_invertY}");
         }
 
         private static void ParseFloat(string v, ref float target)

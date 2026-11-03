@@ -107,6 +107,7 @@ namespace PlayStationPDTEinputFix
         // Same game timings as the controller macros (Proxy.cs), kept separately here.
         private const long RUN_STATE_MS = 800, JUMP_GUARD_MS = 500, JUMP_GAP_MS = 60, JUMP_TAP_MS = 120;
         private const long MACRO_RELEASE_MS = 40, MACRO_PRESS_MS = 110, SPRINT_ENGAGE_MS = 120, SPRINT_STOP_MS = 150;
+        private const long ROLL_TAP_MS = 80, STICK_SUSTAIN_MS = 250;
 
         // ---------------------------------------------------------------------------------
         // Win32
@@ -172,12 +173,22 @@ namespace PlayStationPDTEinputFix
         // ---------------------------------------------------------------------------------
         // Safe memory reads (game pointers can be stale during loading)
         // ---------------------------------------------------------------------------------
+        private static readonly IntPtr _self = GetCurrentProcess();
+        private static uint _pid;
+
         private static bool Read(uint addr, void* buf, int size)
         {
             if (addr < 0x10000) return false;
             IntPtr got;
-            return ReadProcessMemory(GetCurrentProcess(), (IntPtr)addr, buf, (IntPtr)size, &got) != 0 && got == (IntPtr)size;
+            return ReadProcessMemory(_self, (IntPtr)addr, buf, (IntPtr)size, &got) != 0 && got == (IntPtr)size;
         }
+
+        // The four fixed game pointers (MenuMan, camera holder, WorldChrMan, GameDataMan) are in the exe's own
+        // data section, which the game's code reads directly every frame (the CORE signatures cover that code).
+        // Init checks once that they are readable, so after that they are read directly, without a system call.
+        // Everything reached THROUGH them can be stale during loading and still goes through Read.
+        private static readonly uint[] _staticPointers = { ADDR_MENUMAN, ADDR_CAMHOLDER, ADDR_WORLDCHRMAN, ADDR_GAMEDATAMAN };
+        private static uint Static(uint addr) => *(uint*)addr;
         private static uint RdU32(uint addr) { uint v = 0; return Read(addr, &v, 4) ? v : 0; }
         private static int RdI32(uint addr) { int v = 0; return Read(addr, &v, 4) ? v : 0; }
         private static byte RdU8(uint addr) { byte v = 0; return Read(addr, &v, 1) ? v : (byte)0; }
@@ -214,6 +225,12 @@ namespace PlayStationPDTEinputFix
                     }
             }
             if (!groupOk[SIG_CORE]) { Log("keyboard + mouse OFF (menu/camera state not recognised), nothing patched"); return; }
+            foreach (uint a in _staticPointers)
+            {
+                uint v;
+                if (!Read(a, &v, 4)) { Log($"game pointer 0x{a:X8} not readable, keyboard + mouse OFF, nothing patched"); return; }
+            }
+            _pid = GetCurrentProcessId();
 
             // follow camera: argument = ebx, replays "fld dword ptr [ebx+0x144]" (so the new yaw is used)
             if (!groupOk[SIG_FOLLOW]) Log("mouse camera in normal view OFF (code not recognised), keyboard still works");
@@ -477,10 +494,10 @@ namespace PlayStationPDTEinputFix
 
         private static void UpdatePhase()
         {
-            uint menuMan = RdU32(ADDR_MENUMAN);
-            uint player = RdU32(RdU32(ADDR_WORLDCHRMAN) + 0x3C);
-            uint chrCam = RdU32(RdU32(ADDR_CAMHOLDER) + 0x1024);
-            uint gameData = RdU32(RdU32(ADDR_GAMEDATAMAN) + 0x8);
+            uint menuMan = Static(ADDR_MENUMAN);
+            uint player = RdU32(Static(ADDR_WORLDCHRMAN) + 0x3C);
+            uint chrCam = RdU32(Static(ADDR_CAMHOLDER) + 0x1024);
+            uint gameData = RdU32(Static(ADDR_GAMEDATAMAN) + 0x8);
             int loading = menuMan != 0 ? RdI32(menuMan + 0x7EC) : 0;
             uint menuMask = menuMan != 0 ? ((delegate* unmanaged[Cdecl]<uint>)ADDR_ISSHOWMENU)() : 0;
             int camMode = chrCam != 0 ? RdI32(chrCam + CHRCAM_MODE) : 0;
@@ -604,7 +621,7 @@ namespace PlayStationPDTEinputFix
                 IntPtr fg = GetForegroundWindow();
                 uint pid = 0;
                 if (fg != IntPtr.Zero) GetWindowThreadProcessId(fg, &pid);
-                _focused = pid == GetCurrentProcessId();
+                _focused = pid == _pid;
 
                 bool mouseOk = ReadOwnMouse();
                 Array.Clear(_down);
@@ -694,12 +711,14 @@ namespace PlayStationPDTEinputFix
         private const ushort MASK_START = 0x0010, MASK_BACK = 0x0020, MASK_RS = 0x0080, MASK_LB = 0x0100, MASK_RB = 0x0200;
         private const ushort MASK_A = 0x1000, MASK_B = 0x2000, MASK_X = 0x4000, MASK_Y = 0x8000;
 
-        // Dash / jump state (the keyboard's own copy of the controller's mute-jump and JUMP_ONLY logic)
+        // Dash / jump / roll state (the keyboard's own copy of the controller's macro and mute-jump logic)
         private static bool _bHeldLast, _guardArmed, _bHoldWasMoving, _jumpActive, _jumpNeedsRamp;
         private static long _bHoldStart, _sprintEnd, _jumpStart;
         private static long _flickWindowStart, _flickCooldownUntil;
         private static bool _kickActive, _leapActive, _sprintOn, _sprintEngaged, _sprintHasRun, _sprintLiveTiming, _sprintNeutralTiming;
         private static long _kickStart, _leapStart, _sprintLiveSince, _sprintNeutralSince;
+        private static bool _dashEngaged, _dashBleeding, _rollActive;
+        private static long _dashPressStart, _dashNeutralSince, _rollStart;
         private static int _flickAcc;
 
         private static bool Act_(Act a) => _act[(int)a];
@@ -741,7 +760,8 @@ namespace PlayStationPDTEinputFix
                 // the hero can walk while a menu is open (not on the title screen, where there is no hero)
                 if (!title) MoveStick(ref k);
                 _bHeldLast = false; _guardArmed = false; _jumpActive = false;
-                _sprintOn = false; _sprintEngaged = false; _kickActive = false; _leapActive = false;
+                _sprintOn = false; _sprintEngaged = false; _dashEngaged = false; _dashBleeding = false;
+                _rollActive = false; _kickActive = false; _leapActive = false;
                 _flickLeft.Clear(); _flickRight.Clear();
                 _kbPad = k;
                 return;
@@ -814,11 +834,11 @@ namespace PlayStationPDTEinputFix
                 else _leapActive = false;
             }
 
-            // ---- DASH_SPRINT_ONLY: press once, sprint while moving ----
+            // ---- AUTO_RUN_Key: press once, sprint while moving ----
             // Like the controller's AUTO_RUN with AutoRun_CancelOnStop = TRUE: it switches off when you
             // stop moving, attack, or press a button that opens something. Walking pauses it.
             bool wantSprint = false;
-            if (Pressed(Act.DashSprintOnly))
+            if (Pressed(Act.AutoRun))
             {
                 _sprintOn = !_sprintOn;
                 _sprintEngaged = false; _sprintHasRun = false; _sprintLiveTiming = false; _sprintNeutralTiming = false;
@@ -850,12 +870,79 @@ namespace PlayStationPDTEinputFix
                 if (_sprintEngaged) wantSprint = true;
             }
 
-            // ---- dash / roll / backstep: B, but it can never jump ----
+            // ---- DASH_SPRINT_ONLY_Key: hold to sprint; taps become micro-sprints (same as controller) ----
+            if (Act_(Act.DashSprintOnly))
+            {
+                if (Pressed(Act.DashSprintOnly))
+                {
+                    _dashPressStart = _now;
+                    _dashEngaged = false;
+                    _dashNeutralSince = 0;
+                    _dashBleeding = false;
+                }
+
+                // Starting a sprint requires full-speed movement (moving and not holding WALK).
+                // Once running, any movement keeps it alive, with STICK_SUSTAIN_MS tolerance for brief
+                // neutral gaps when changing WASD directions.
+                bool dashMoveOk = _dashEngaged ? moving : (moving && !Act_(Act.Walk));
+                if (dashMoveOk)
+                {
+                    _dashEngaged = true;
+                    _dashNeutralSince = 0;
+                }
+                else if (_dashEngaged)
+                {
+                    if (_dashNeutralSince == 0) _dashNeutralSince = _now;
+                    if (_now - _dashNeutralSince >= STICK_SUSTAIN_MS) _dashEngaged = false;
+                }
+
+                if (_dashEngaged) wantSprint = true;
+            }
+            else
+            {
+                if (_actPrev[(int)Act.DashSprintOnly] && _dashEngaged && (_now - _dashPressStart) < RUN_STATE_MS)
+                    _dashBleeding = true;
+
+                if (_dashBleeding)
+                {
+                    if ((_now - _dashPressStart) < RUN_STATE_MS) wantSprint = true;
+                    else _dashBleeding = false;
+                }
+            }
+
+            // ---- dash / roll / backstep + sprint arbiter & jump guard ----
             // A jump is "release B while running, then press B again quickly". After a real
-            // sprint, B presses are swallowed for JUMP_GUARD_MS so the game leaves the run
-            // state first (same rule as the controller's MUTE_JUMP_FROM_B).
+            // sprint, B presses routed through wantSprint are swallowed for JUMP_GUARD_MS so
+            // the game leaves the run state first.
+            // When MUTE_JUMP_FROM_Key is TRUE, DASH_ROLL_BACKSTEP joins wantSprint so it never jumps.
+            // When MUTE_JUMP_FROM_Key is FALSE, DASH_ROLL_BACKSTEP sets B directly so it can jump as in vanilla.
             if (_guardArmed && _now - _sprintEnd >= JUMP_GUARD_MS) _guardArmed = false;
-            if ((Act_(Act.Dash) || wantSprint) && (_bHeldLast || !_guardArmed)) k.wButtons |= MASK_B;
+            if (_muteJumpFromKey)
+            {
+                if (Act_(Act.Dash)) wantSprint = true;
+            }
+            else if (Act_(Act.Dash))
+            {
+                k.wButtons |= MASK_B;
+            }
+            if (wantSprint && (_bHeldLast || !_guardArmed)) k.wButtons |= MASK_B;
+
+            // ---- ROLL_ONLY_Key: always rolls (or backsteps standing still), never sprints ----
+            if (Pressed(Act.RollOnly))
+            {
+                _rollActive = true;
+                _rollStart = _now;
+            }
+            if (_rollActive)
+            {
+                long e = _now - _rollStart;
+                if (e < ROLL_TAP_MS) k.wButtons |= MASK_B;
+                else
+                {
+                    k.wButtons &= unchecked((ushort)~MASK_B);
+                    if (!Act_(Act.RollOnly)) _rollActive = false;
+                }
+            }
 
             // ---- jump (same as the controller's JUMP_ONLY macro) ----
             if (Pressed(Act.Jump) && moving && !_jumpActive)

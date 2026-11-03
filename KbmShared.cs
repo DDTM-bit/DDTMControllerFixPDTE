@@ -155,8 +155,6 @@ namespace PlayStationPDTEinputFix
                     int eq = line.IndexOf('=');
                     if (eq <= 0) continue;
                     string key = line.Substring(0, eq).Trim().ToUpperInvariant();
-                    if (key == "LEFTSHOULDER") key = "LB";
-                    else if (key == "RIGHTSHOULDER") key = "RB";
                     int slot = Array.IndexOf(_padGameButtons, key);
                     if (slot < 0 || s->Pad[slot] >= 0) continue;
                     string val = line.Substring(eq + 1).Trim();

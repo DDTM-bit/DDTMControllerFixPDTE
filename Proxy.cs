@@ -73,9 +73,22 @@ namespace PlayStationPDTEinputFix
         // ---------------------------------------------------------
         // Macro Tracking Variables
         // ---------------------------------------------------------
+        private enum MacroAction { Kick, LeapAttack, AutoRun, JumpOnly, DashSprintOnly, RollOnly }
+
+        private static MacroAction? MacroFromName(string name) => name switch
+        {
+            "KICK" => MacroAction.Kick,
+            "LEAP_ATTACK" => MacroAction.LeapAttack,
+            "AUTO_RUN" => MacroAction.AutoRun,
+            "JUMP_ONLY" => MacroAction.JumpOnly,
+            "DASH_SPRINT_ONLY" => MacroAction.DashSprintOnly,
+            "ROLL_ONLY" => MacroAction.RollOnly,
+            _ => null
+        };
+
         private class ComboBinding
         {
-            public string ActionName = "";
+            public MacroAction Action;
             public List<SDL.SDL_GameControllerButton> Buttons = new List<SDL.SDL_GameControllerButton>();
             public List<SDL.SDL_GameControllerAxis> Axes = new List<SDL.SDL_GameControllerAxis>();
 
@@ -243,13 +256,11 @@ namespace PlayStationPDTEinputFix
                 target = Math.Min(ms, max);
         }
 
-        // Behaviour settings are read from ANY section, exactly like Preset.
-        // They used to be read only inside [Settings], but the generated file lists
-        // them next to the macros under [Bindings], so they were silently ignored and
-        // the defaults were used instead. That made a hand-written setup behave
-        // differently from the preset that sets the same values in code.
-        // None of these names is a valid binding or stick setting, so there is no
-        // risk of a clash. Returns true when the line was consumed.
+        // Behaviour settings are read from ANY controller section, exactly like Preset
+        // (Preset sits above [Bindings], the macro switches under it, the advanced
+        // overrides under [Advanced]). None of these names is a valid binding or
+        // stick setting, so there is no risk of a clash. Returns true when the line
+        // was consumed.
         private static bool TryParseBehaviourSetting(string key, string val)
         {
             switch (key)
@@ -274,10 +285,8 @@ namespace PlayStationPDTEinputFix
                     _debugLog = ParseBool(val);
                     return true;
 
-                // Advanced overrides. SafeRelease_Ms is the old name for RunState_Ms
-                // and is still accepted so older INIs keep working.
+                // Advanced overrides
                 case "RUNSTATE_MS":
-                case "SAFERELEASE_MS":
                     ParseMs(val, ref _runStateMs, 3000);
                     return true;
 
@@ -290,11 +299,11 @@ namespace PlayStationPDTEinputFix
 
         // Builds one macro from an action name and an input string such as
         // "L3" or "R1 + L3". Shared by the [Bindings] parser and the presets.
-        private static void AddMacro(string action, string value)
+        private static void AddMacro(MacroAction action, string value)
         {
             if (string.IsNullOrEmpty(value) || value == "NONE") return;
 
-            ComboBinding combo = new ComboBinding { ActionName = action };
+            ComboBinding combo = new ComboBinding { Action = action };
             string[] inputs = value.Split('+');
 
             // Enforce maximum of 3 combinations
@@ -338,17 +347,17 @@ namespace PlayStationPDTEinputFix
                 case "DS3_JUMP":
                     _muteJumpFromB = true;
                     _suppressMacroButtons = true;
-                    AddMacro("JUMP_ONLY", "L3");
+                    AddMacro(MacroAction.JumpOnly, "L3");
                     break;
 
                 // Sprint moved onto CROSS, auto-run on L3, kick and leap on CROSS combos.
                 case "MORTAL_SHELL":
                     _suppressMacroButtons = false;
                     _autoRunCancelOnStop = true;
-                    AddMacro("AUTO_RUN", "L3");
-                    AddMacro("DASH_SPRINT_ONLY", "CROSS");
-                    AddMacro("KICK", "CROSS + R1");
-                    AddMacro("LEAP_ATTACK", "CROSS + R2");
+                    AddMacro(MacroAction.AutoRun, "L3");
+                    AddMacro(MacroAction.DashSprintOnly, "CROSS");
+                    AddMacro(MacroAction.Kick, "CROSS + R1");
+                    AddMacro(MacroAction.LeapAttack, "CROSS + R2");
                     break;
 
                 // Jump on CROSS as in Elden Ring, with kick and leap on CROSS combos.
@@ -356,19 +365,19 @@ namespace PlayStationPDTEinputFix
                     _muteJumpFromB = true;
                     _suppressMacroButtons = false;
                     _autoRunCancelOnStop = true;
-                    AddMacro("JUMP_ONLY", "CROSS");
-                    AddMacro("KICK", "CROSS + R1");
-                    AddMacro("LEAP_ATTACK", "CROSS + R2");
-                    AddMacro("AUTO_RUN", "L3");
+                    AddMacro(MacroAction.JumpOnly, "CROSS");
+                    AddMacro(MacroAction.Kick, "CROSS + R1");
+                    AddMacro(MacroAction.LeapAttack, "CROSS + R2");
+                    AddMacro(MacroAction.AutoRun, "L3");
                     break;
 
                 // Vanilla movement, plus auto-run and instant kick/leap on CIRCLE combos.
                 case "RUN_AND_ATTACK":
                     _muteJumpFromB = false;
                     _suppressMacroButtons = true;
-                    AddMacro("AUTO_RUN", "L3");
-                    AddMacro("KICK", "CIRCLE + R1");
-                    AddMacro("LEAP_ATTACK", "CIRCLE + R2");
+                    AddMacro(MacroAction.AutoRun, "L3");
+                    AddMacro(MacroAction.Kick, "CIRCLE + R1");
+                    AddMacro(MacroAction.LeapAttack, "CIRCLE + R2");
                     break;
 
                 default:
@@ -427,12 +436,12 @@ namespace PlayStationPDTEinputFix
                 "B" => MASK_B,
                 "X" => MASK_X,
                 "Y" => MASK_Y,
-                "LB" or "LEFTSHOULDER" => MASK_LB,
-                "RB" or "RIGHTSHOULDER" => MASK_RB,
-                "LS" or "LEFTSTICK" => MASK_LS,
-                "RS" or "RIGHTSTICK" => MASK_RS,
-                "START" or "OPTIONS" => MASK_START,
-                "BACK" or "SELECT" => MASK_BACK,
+                "LB" => MASK_LB,
+                "RB" => MASK_RB,
+                "LS" => MASK_LS,
+                "RS" => MASK_RS,
+                "START" => MASK_START,
+                "BACK" => MASK_BACK,
                 "DPAD_UP" => MASK_DPAD_UP,
                 "DPAD_DOWN" => MASK_DPAD_DOWN,
                 "DPAD_LEFT" => MASK_DPAD_LEFT,
@@ -446,7 +455,7 @@ namespace PlayStationPDTEinputFix
             string iniPath = "DDTMControllerMappings.ini";
             if (!File.Exists(iniPath))
             {
-                File.WriteAllText(iniPath,
+                const string controllerSection =
 @"# ===========================================================================
 #  DDTM CONTROLLER FIX
 #
@@ -727,14 +736,16 @@ Rumble_RightMotor = 1.0
 # reading at that moment. Only for reporting a problem - leave it FALSE normally.
 # The file is appended to, so delete it before a test run.
 DebugLog = FALSE
-"
-);
+";
+                // The whole default file: the controller sections above, then the [Keyboard] / [Mouse]
+                // sections (KbmBindings.cs), always with Windows line ends.
+                File.WriteAllText(iniPath, (controllerSection + KeyboardMouse.DEFAULT_SECTION).Replace("\r\n", "\n").Replace("\n", "\r\n"));
             }
 
             _buttonMap.Clear();
             _macros.Clear();
             string[] lines = File.ReadAllLines(iniPath);
-            bool inBindings = false, inSettings = false;
+            bool inBindings = false, inSettings = false, inKbm = false;
 
             foreach (string rawLine in lines)
             {
@@ -749,8 +760,13 @@ DebugLog = FALSE
                     // so it is parsed by the same branch.
                     inSettings = line.Equals("[Settings]", StringComparison.OrdinalIgnoreCase)
                               || line.Equals("[Advanced]", StringComparison.OrdinalIgnoreCase);
+
+                    inKbm = line.Equals("[Keyboard]", StringComparison.OrdinalIgnoreCase)
+                         || line.Equals("[Mouse]", StringComparison.OrdinalIgnoreCase);
                     continue;
                 }
+
+                if (inKbm) continue;
 
                 string[] parts = line.Split('=');
                 if (parts.Length != 2) continue;
@@ -764,11 +780,11 @@ DebugLog = FALSE
 
                 if (inBindings)
                 {
-                    // Catch Non-Standard Macros
-                    string[] specialKeys = { "KICK", "LEAP_ATTACK", "AUTO_RUN", "JUMP_ONLY", "DASH_SPRINT_ONLY", "ROLL_ONLY" };
-                    if (Array.Exists(specialKeys, k => k == key))
+                    // Macros (KICK, LEAP_ATTACK, AUTO_RUN, JUMP_ONLY, DASH_SPRINT_ONLY, ROLL_ONLY)
+                    MacroAction? macroAction = MacroFromName(key);
+                    if (macroAction.HasValue)
                     {
-                        AddMacro(key, val);
+                        AddMacro(macroAction.Value, val);
                         continue;
                     }
 
@@ -799,12 +815,6 @@ DebugLog = FALSE
                     if (key == "LS_DEADZONEMAX") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _lsDeadzoneMax);
                     if (key == "RS_DEADZONEMIN") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _rsDeadzoneMin);
                     if (key == "RS_DEADZONEMAX") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _rsDeadzoneMax);
-
-                    // For backwards compatibility
-                    if (key == "LS_DEADZONEMIN_X") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _lsDeadzoneMin);
-                    if (key == "LS_DEADZONEMAX_X") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _lsDeadzoneMax);
-                    if (key == "RS_DEADZONEMIN_X") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _rsDeadzoneMin);
-                    if (key == "RS_DEADZONEMAX_X") short.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _rsDeadzoneMax);
 
                     // Fix the float parsing bug
                     if (key == "LS_SENSITIVITY_X") float.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out _lsSensX);
@@ -1094,14 +1104,14 @@ DebugLog = FALSE
             {
                 if (macro.IsPressed(_controller))
                 {
-                    switch (macro.ActionName)
+                    switch (macro.Action)
                     {
-                        case "KICK": kickPressed = true; break;
-                        case "LEAP_ATTACK": leapPressed = true; break;
-                        case "AUTO_RUN": autoRunPressed = true; break;
-                        case "JUMP_ONLY": jumpPressed = true; break;
-                        case "DASH_SPRINT_ONLY": dashSprintPressed = true; break;
-                        case "ROLL_ONLY": rollPressed = true; break;
+                        case MacroAction.Kick: kickPressed = true; break;
+                        case MacroAction.LeapAttack: leapPressed = true; break;
+                        case MacroAction.AutoRun: autoRunPressed = true; break;
+                        case MacroAction.JumpOnly: jumpPressed = true; break;
+                        case MacroAction.DashSprintOnly: dashSprintPressed = true; break;
+                        case MacroAction.RollOnly: rollPressed = true; break;
                     }
                 }
             }
@@ -1447,4 +1457,4 @@ DebugLog = FALSE
             return 0;
         }
     }
-}
+}
