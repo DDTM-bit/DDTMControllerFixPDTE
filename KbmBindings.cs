@@ -223,8 +223,7 @@ AUTO_RUN_Key = NONE
 # backsteps, as the game normally does.
 ROLL_ONLY_Key = NONE
 
-# Instant kick and instant jumping heavy attack (no flick needed),
-# for example KICK = X  or  KICK = LALT + MOUSE_LEFT
+# Instant kick and instant jumping heavy attack (no flick needed)
 KICK = NONE
 LEAP_ATTACK = NONE
 
