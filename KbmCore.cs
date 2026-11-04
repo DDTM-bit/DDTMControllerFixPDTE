@@ -670,6 +670,7 @@ namespace PlayStationPDTEinputFix
 
                 BuildKeyboardPad(menu, forcedMouse);
                 CameraFromMouse(menu);
+                MouseStick(pad, menu);
 
                 UpdateCursor(menu && !_npcTalk && !_dialogAlone, _phase == Phase.Loading, mouseMoved || _down[IN_MOUSE_LEFT] || _down[IN_MOUSE_RIGHT], kbmUsed || mouseMoved, controllerUsed);
                 UpdateShared(hasController, controllerUsed, kbmUsed || mouseMoved, menu, menuTabs);   // for DSfix (KbmShared.cs)
@@ -987,6 +988,23 @@ namespace PlayStationPDTEinputFix
         private static byte* _chaseCam;
         private static float _chaseOrigChr, _chaseOrigTarget, _chaseSetChr, _chaseSetTarget;
 
+        // Walls. The game turns its camera away from a wall by itself (a search in whole-degree steps that
+        // grows to several degrees per frame), EXCEPT while the right stick turns the camera: then it pulls the
+        // camera in close to the hero and lets it pass the wall. It decides that from the real stick, so:
+        //   - while the mouse turns the camera, the game also gets a right-stick push in the same direction
+        //     (keyboard pad, MouseStick), so it treats the turn like a stick turn and the camera passes walls;
+        //   - the yaw is held at the mouse's own value (FollowCamApply), so the turn stays exactly the mouse's:
+        //     the stick's own turn, the wall turn-back and the stick's slow-down after release never show.
+        // The camera's position (following the hero, pulled in at walls) stays the game's own.
+        private const short MOUSE_STICK_VALUE = 16000;    // right stick push given to the game while the mouse turns
+        private const long MOUSE_STICK_HOLD_MS = 100;     // ... kept this long after the last mouse movement
+        private const long MOUSE_YAW_HOLD_MS = 250;       // yaw held at the mouse's value this long after it (covers the stick's slow-down)
+        private static long _mouseTurnAt = long.MinValue / 2;
+        private static int _mouseTurnDir;
+        private static bool _mouseStickOn, _yawHeld, _yawHoldHave;
+        private static byte* _yawHoldCam;
+        private static float _yawHoldValue;
+
         private static void CameraFromMouse(bool menu)
         {
             // The controller's right stick has priority: while it turns the camera, the mouse does not, and the
@@ -1005,6 +1023,20 @@ namespace PlayStationPDTEinputFix
             // Kept small if the camera has not taken it yet (cutscene, camera not updating), so it never jumps.
             _pendYaw = Math.Clamp(_pendYaw + _mouseDX * RAD_PER_COUNT * sx * (_invertX ? -1 : 1), -0.5f, 0.5f);
             _pendPitch = Math.Clamp(_pendPitch + _mouseDY * RAD_PER_COUNT * sy * (_invertY ? -1 : 1), -0.5f, 0.5f);
+            if (!aim && _mouseDX != 0) { _mouseTurnAt = _now; _mouseTurnDir = (_mouseDX > 0) != _invertX ? 1 : -1; }
+        }
+
+        // After CameraFromMouse, before the keyboard pad is mixed in: the right-stick push for walls (see above).
+        // Never in menus, while aiming, while locked on (the stick would switch targets), while the lock-on button
+        // is pressed, or while the controller's own right stick turns the camera.
+        private static void MouseStick(in Proxy.XINPUT_GAMEPAD controller, bool menu)
+        {
+            _mouseStickOn = !menu && _focused && !_locked && _followHooked && !_ctrlCamActive
+                         && (_phase == Phase.Gameplay || _phase == Phase.BowReady)
+                         && _now - _mouseTurnAt <= MOUSE_STICK_HOLD_MS
+                         && _kbPad.sThumbRX == 0 && _kbPad.sThumbRY == 0
+                         && !Act_(Act.LockOn) && (controller.wButtons & MASK_RS) == 0;
+            if (_mouseStickOn) _kbPad.sThumbRX = (short)(_mouseTurnDir * MOUSE_STICK_VALUE);
         }
 
         private static float WrapPi(float a)
@@ -1032,9 +1064,17 @@ namespace PlayStationPDTEinputFix
         {
             ApplyFollowSpeed(cam);
             bool canTurn = (_phase == Phase.Gameplay || _phase == Phase.BowReady) && !_locked && cam[FOLLOW_RESET] == 0 && cam[FOLLOW_EVENT_LOCK] == 0;
+            float* f = (float*)cam;
+
+            // While the mouse turns (and shortly after), the yaw stays the mouse's: whatever the game did to it since
+            // our last write (its stick turn, the wall turn-back) is replaced. A big jump is the game's own (respawn,
+            // camera reset) and is kept.
+            _yawHeld = canTurn && !_ctrlCamActive && _yawHoldHave && cam == _yawHoldCam && _now - _mouseTurnAt <= MOUSE_YAW_HOLD_MS
+                       && Math.Abs(WrapPi(f[FOLLOW_YAW / 4] - _yawHoldValue)) < 0.5f;
+            if (_yawHeld) f[FOLLOW_YAW / 4] = _yawHoldValue;
+
             if (canTurn && (_pendYaw != 0 || _pendPitch != 0))
             {
-                float* f = (float*)cam;
                 f[FOLLOW_YAW / 4] = WrapPi(f[FOLLOW_YAW / 4] + _pendYaw);
                 float min = f[FOLLOW_PITCH_MIN / 4], max = f[FOLLOW_PITCH_MAX / 4];
                 f[FOLLOW_PITCH / 4] = Math.Clamp(f[FOLLOW_PITCH / 4] + _pendPitch, Math.Min(min, max), Math.Max(min, max));
@@ -1043,6 +1083,7 @@ namespace PlayStationPDTEinputFix
                 f[FOLLOW_CTRL_WAIT / 4] = f[FOLLOW_CTRL_WAIT_TIME / 4];
             }
             _pendYaw = 0; _pendPitch = 0;
+            _yawHoldValue = f[FOLLOW_YAW / 4]; _yawHoldCam = cam; _yawHoldHave = true;
         }
 
         private static void ApplyFollowSpeed(byte* cam)
