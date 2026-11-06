@@ -14,6 +14,11 @@
 //  Version 2 adds the controller mapping of the face buttons, LB / RB and LT / RT
 //  ([Bindings] of DDTMControllerMappings.ini), so DSfix can show the icon of the real
 //  button that triggers each game button.
+//
+//  Version 3 adds the menu cursor: this DLL publishes when its cursor should show, and
+//  DSfix may draw the cursor itself inside the game picture (same colours as the game,
+//  smooth edges). While DSfix does that (HostCursorTick fresh), the Windows cursor is
+//  hidden. Without DSfix, or with an older one, HostCursorTick stays 0 and nothing changes.
 // =====================================================================================
 using System;
 using System.Collections.Generic;
@@ -27,7 +32,7 @@ namespace PlayStationPDTEinputFix
     internal unsafe struct DdtmSharedState
     {
         public uint Magic;           // 0x4D544444 ("DDTM")
-        public int Version;          // 2 (1: no Pad[])
+        public int Version;          // 3 (2: no cursor fields, 1: no Pad[])
         public int Ready;            // 1 once Cell[] is filled (the .ini is read at the first poll)
         public int KbmActive;        // 1 = keyboard / mouse used last, 0 = controller
         public int Phase;            // 0 = game (hint messages included), 1 = menu, 2 = quick menu or a menu opened from it
@@ -37,6 +42,10 @@ namespace PlayStationPDTEinputFix
         // as 0 SOUTH (A / CROSS), 1 EAST (B / CIRCLE), 2 WEST (X / SQUARE), 3 NORTH (Y / TRIANGLE), 4 LB, 5 RB,
         // 6 LT, 7 RT; -1 = none or another button (DSfix keeps the game's icon)
         public fixed int Pad[8];
+        // Version 3: the menu cursor
+        public int CursorVisible;    // written here: 1 = the mouse cursor should show now (menus, see KbmCursor.cs)
+        public uint HostCursorTick;  // written by DSfix: GetTickCount() of its last frame that can draw the cursor (never 0);
+                                     // while it is less than 250 ms old, DSfix draws the cursor and the Windows cursor is hidden
     }
 
     public static unsafe class DdtmExports
@@ -54,7 +63,7 @@ namespace PlayStationPDTEinputFix
         {
             var s = (DdtmSharedState*)NativeMemory.AllocZeroed((nuint)sizeof(DdtmSharedState));
             s->Magic = 0x4D544444;
-            s->Version = 2;
+            s->Version = 3;
             for (int i = 0; i < 16; i++) s->Cell[i] = -1;
             for (int i = 0; i < 8; i++) s->Pad[i] = -1;
             return s;

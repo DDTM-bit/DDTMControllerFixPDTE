@@ -1,12 +1,15 @@
 // =====================================================================================
 //  Keyboard + mouse: the mouse cursor.
 //
-//  - The cursor picture is built into the dll (resources\cursor_*.png, see the
-//    .csproj) and chosen by the game window's height:
-//        up to 1080 -> cursor_1080p.png, 1081..2159 -> cursor_1440p.png,
-//        2160 and more -> cursor_2160p.png
-//    The click point is the tip of the pointing finger (the top-left-most visible
-//    pixel), so a new picture works without any setting.
+//  - The cursor picture is built into the dll (resources\cursor.png, see the .csproj):
+//    one square master (64 x 64), shown at 64 x window height / 2160 (at most its own
+//    size): 32 px at 1080p, 43 px at 1440p, 64 px at 2160p and more. It is scaled down
+//    smoothly (area average with premultiplied alpha) only when the window height
+//    changes. The click point is the tip of the pointing finger (the top-left-most
+//    visible pixel of the master), so a new picture works without any setting.
+//  - With DSfix (shared block version 3) the cursor is drawn by DSfix inside the game
+//    picture, so it has exactly the game's colours; the Windows cursor is then hidden.
+//    DSfix uses the same size and click point. Without DSfix nothing changes.
 //  - In game the cursor is hidden and kept in the middle of the window. In menus it
 //    shows when the menu was opened with keyboard or mouse, or when the mouse moves,
 //    and hides again when the controller is used.
@@ -63,9 +66,12 @@ namespace PlayStationPDTEinputFix
         private const long MENU_HIDE_DELAY_MS = 200;
         private static long _menuGoneSince;
         private static bool _counterFixedGame, _counterFixedWindow;
-        private static string _cursorName = "";
+        private static int _cursorSize;
         private static long _nextSizeCheck;
-        private static readonly System.Collections.Generic.Dictionary<string, IntPtr> _cursorCache = new();
+        private static readonly System.Collections.Generic.Dictionary<int, IntPtr> _cursorCache = new();
+        private static byte[]? _master;                 // resources\cursor.png as RGBA (null: missing or unreadable)
+        private static int _masterW, _masterH, _masterHotX, _masterHotY;
+        private static bool _masterTried, _hostDraws;
 
         // =============================================================================
         // Per poll (game thread)
@@ -131,6 +137,15 @@ namespace PlayStationPDTEinputFix
                 _cursorVisible = vis;
                 PostMessageW(_hwnd, WM_KBM_CURSOR, IntPtr.Zero, IntPtr.Zero);
             }
+            Shared->CursorVisible = vis ? 1 : 0;
+            // DSfix starts or stops drawing the cursor: show / hide the Windows cursor at once
+            bool host = HostDrawsCursor();
+            if (host != _hostDraws)
+            {
+                _hostDraws = host;
+                Log(host ? "cursor: drawn by DSfix (Windows cursor hidden)" : "cursor: Windows cursor");
+                PostMessageW(_hwnd, WM_KBM_CURSOR, IntPtr.Zero, IntPtr.Zero);
+            }
 
             // In game: keep the hidden cursor near the middle, so it never leaves the window. It is only
             // moved back when it has gone more than a quarter of the window away (not every frame).
@@ -173,7 +188,7 @@ namespace PlayStationPDTEinputFix
                     case WM_SETCURSOR:
                         if (((int)l & 0xFFFF) == 1)   // HTCLIENT: the cursor is over the game picture
                         {
-                            SetCursor(_cursorVisible ? CurrentCursor() : IntPtr.Zero);
+                            SetCursor(_cursorVisible && !HostDrawsCursor() ? CurrentCursor() : IntPtr.Zero);
                             return (IntPtr)1;
                         }
                         break;
@@ -181,7 +196,7 @@ namespace PlayStationPDTEinputFix
                         {
                             int* pt = stackalloc int[2];
                             if (GetCursorPos(pt) != 0 && WindowFromPoint(((long)pt[1] << 32) | (uint)pt[0]) == hwnd)
-                                SetCursor(_cursorVisible ? CurrentCursor() : IntPtr.Zero);
+                                SetCursor(_cursorVisible && !HostDrawsCursor() ? CurrentCursor() : IntPtr.Zero);
                             return IntPtr.Zero;
                         }
                     case WM_SYSKEYDOWN:
@@ -197,6 +212,16 @@ namespace PlayStationPDTEinputFix
             return CallWindowProcW(_oldWndProc, hwnd, msg, w, l);
         }
 
+        // DSfix draws the cursor itself while its heartbeat (shared block version 3) is less than 250 ms old.
+        // Signed difference: a heartbeat written a moment "after" this thread read the clock counts as fresh too.
+        private static bool HostDrawsCursor()
+        {
+            uint t = Shared->HostCursorTick;
+            if (t == 0) return false;
+            int age = unchecked(Environment.TickCount - (int)t);
+            return age > -1000 && age < 250;
+        }
+
         private static IntPtr CurrentCursor()
         {
             IntPtr c = _hCursor;
@@ -206,42 +231,113 @@ namespace PlayStationPDTEinputFix
         // =============================================================================
         // Cursor picture
         // =============================================================================
+        // The cursor's size for a window height: 64 x height / 2160 of the master, at most the master's own size
+        // (DSfix uses the same formula for the cursor it draws).
+        private static int CursorSizeFor(int height, int masterSize)
+        {
+            int size = (int)Math.Floor(64.0 * height / 2160.0 + 0.5);
+            if (size > masterSize) size = masterSize;
+            if (size < 16) size = 16;
+            return size;
+        }
+
         private static void ChooseCursorPicture()
         {
             int* r = stackalloc int[4];
             if (GetClientRect(_hwnd, r) == 0) return;
             int h = r[3] - r[1];
             if (h <= 0) return;
-            string name = h <= 1080 ? "cursor_1080p.png" : h < 2160 ? "cursor_1440p.png" : "cursor_2160p.png";
-            if (name == _cursorName) return;
-            _cursorName = name;
+            if (!LoadMaster()) { _hCursor = IntPtr.Zero; return; }
+            int size = CursorSizeFor(h, Math.Max(_masterW, _masterH));
+            if (size == _cursorSize) return;               // only when the window height gives another size
+            _cursorSize = size;
 
-            if (!_cursorCache.TryGetValue(name, out IntPtr cur))
+            if (!_cursorCache.TryGetValue(size, out IntPtr cur))
             {
-                cur = LoadCursorPicture(name);
-                _cursorCache[name] = cur;
+                cur = MakeCursor(size);
+                _cursorCache[size] = cur;
             }
             _hCursor = cur;
             PostMessageW(_hwnd, WM_KBM_CURSOR, IntPtr.Zero, IntPtr.Zero);
-            Log($"window height {h}: cursor picture {name}{(cur == IntPtr.Zero ? " NOT AVAILABLE, Windows arrow used" : "")}");
+            Log($"window height {h}: cursor {size} px{(cur == IntPtr.Zero ? " NOT AVAILABLE, Windows arrow used" : "")}");
         }
 
-        private static IntPtr LoadCursorPicture(string name)
+        // resources\cursor.png, read once
+        private static bool LoadMaster()
         {
+            if (_masterTried) return _master != null;
+            _masterTried = true;
             try
             {
-                using Stream? s = Assembly.GetExecutingAssembly().GetManifestResourceStream(name);
-                if (s == null) return IntPtr.Zero;
+                using Stream? s = Assembly.GetExecutingAssembly().GetManifestResourceStream("cursor.png");
+                if (s == null) { Log("cursor.png: missing from the dll"); return false; }
                 byte[] png = new byte[s.Length];
                 s.ReadExactly(png);
                 byte[]? rgba = DecodePng(png, out int w, out int h);
-                if (rgba == null) { Log($"{name}: not a supported PNG (needs 8-bit RGBA or RGB, not interlaced)"); return IntPtr.Zero; }
-
+                if (rgba == null) { Log("cursor.png: not a supported PNG (needs 8-bit RGBA or RGB, not interlaced)"); return false; }
                 // Click point: the top-left-most visible pixel (the finger tip).
                 int hx = 0, hy = 0, best = int.MaxValue;
                 for (int y = 0; y < h; y++)
                     for (int x = 0; x < w; x++)
                         if (rgba[(y * w + x) * 4 + 3] >= 128 && x + y < best) { best = x + y; hx = x; hy = y; }
+                _master = rgba; _masterW = w; _masterH = h; _masterHotX = hx; _masterHotY = hy;
+                Log($"cursor.png: {w}x{h}, click point {hx},{hy}");
+                return true;
+            }
+            catch (Exception e) { Log($"cursor.png: {e.Message}"); return false; }
+        }
+
+        // The master scaled so its larger side is 'size' px: each new pixel is the area average of the master pixels
+        // it covers, with premultiplied alpha (transparent pixels do not darken the edges). Returns straight RGBA.
+        private static byte[] Downscale(byte[] src, int sw, int sh, int dw, int dh)
+        {
+            byte[] dst = new byte[dw * dh * 4];
+            double fx = (double)sw / dw, fy = (double)sh / dh;
+            for (int y = 0; y < dh; y++)
+            {
+                double y0 = y * fy, y1 = y0 + fy;
+                for (int x = 0; x < dw; x++)
+                {
+                    double x0 = x * fx, x1 = x0 + fx;
+                    double r = 0, g = 0, b = 0, a = 0, area = 0;
+                    for (int sy = (int)y0; sy < sh && sy < y1; sy++)
+                    {
+                        double wy = Math.Min(sy + 1, y1) - Math.Max(sy, y0);
+                        if (wy <= 0) continue;
+                        for (int sx = (int)x0; sx < sw && sx < x1; sx++)
+                        {
+                            double wx = Math.Min(sx + 1, x1) - Math.Max(sx, x0);
+                            if (wx <= 0) continue;
+                            double wgt = wx * wy;
+                            int i = (sy * sw + sx) * 4;
+                            double al = src[i + 3] / 255.0;
+                            r += src[i] * al * wgt; g += src[i + 1] * al * wgt; b += src[i + 2] * al * wgt; a += al * wgt;
+                            area += wgt;
+                        }
+                    }
+                    int o = (y * dw + x) * 4;
+                    if (a <= 0 || area <= 0) continue;            // fully transparent
+                    dst[o] = (byte)Math.Min(255, Math.Floor(r / a + 0.5));
+                    dst[o + 1] = (byte)Math.Min(255, Math.Floor(g / a + 0.5));
+                    dst[o + 2] = (byte)Math.Min(255, Math.Floor(b / a + 0.5));
+                    dst[o + 3] = (byte)Math.Min(255, Math.Floor(a / area * 255.0 + 0.5));
+                }
+            }
+            return dst;
+        }
+
+        private static IntPtr MakeCursor(int size)
+        {
+            try
+            {
+                byte[] master = _master!;
+                int big = Math.Max(_masterW, _masterH);
+                int w = Math.Max(1, (int)Math.Floor((double)_masterW * size / big + 0.5));
+                int h = Math.Max(1, (int)Math.Floor((double)_masterH * size / big + 0.5));
+                byte[] rgba = (w == _masterW && h == _masterH) ? master : Downscale(master, _masterW, _masterH, w, h);
+                // the click point scaled the same way (DSfix uses the same rounding)
+                int hx = Math.Min(w - 1, (int)Math.Floor((double)_masterHotX * w / _masterW + 0.5));
+                int hy = Math.Min(h - 1, (int)Math.Floor((double)_masterHotY * h / _masterH + 0.5));
 
                 int* bmi = stackalloc int[10];
                 bmi[0] = 40; bmi[1] = w; bmi[2] = -h;              // top-down
@@ -266,10 +362,10 @@ namespace PlayStationPDTEinputFix
                 IntPtr cur = CreateIconIndirect(&ii);
                 DeleteObject(color);
                 DeleteObject(mask);
-                Log($"{name}: {w}x{h}, click point {hx},{hy}{(cur == IntPtr.Zero ? ", CreateIconIndirect FAILED" : "")}");
+                Log($"cursor {w}x{h}, click point {hx},{hy}{(cur == IntPtr.Zero ? ", CreateIconIndirect FAILED" : "")}");
                 return cur;
             }
-            catch (Exception e) { Log($"{name}: {e.Message}"); return IntPtr.Zero; }
+            catch (Exception e) { Log($"cursor: {e.Message}"); return IntPtr.Zero; }
         }
 
         // Minimal PNG reader: 8-bit RGBA or RGB, not interlaced. Returns RGBA.
