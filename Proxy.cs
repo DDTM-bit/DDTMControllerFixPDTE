@@ -205,6 +205,22 @@ namespace PlayStationPDTEinputFix
         // 2. The Universal INI Configuration Engine
         // ---------------------------------------------------------
         private static Dictionary<SDL.SDL_GameControllerButton, ushort> _buttonMap = new Dictionary<SDL.SDL_GameControllerButton, ushort>();
+        // the real buttons and their XInput bits (published for DSfix, shared block version 5)
+        private static readonly SDL.SDL_GameControllerButton[] _physButtons =
+        {
+            SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_UP, SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_DOWN,
+            SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_LEFT, SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_RIGHT,
+            SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_START, SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_BACK,
+            SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_LEFTSTICK, SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_RIGHTSTICK,
+            SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_LEFTSHOULDER, SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_RIGHTSHOULDER,
+            SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_A, SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_B,
+            SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_X, SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_Y,
+        };
+        private static readonly ushort[] _physMasks =
+        {
+            MASK_DPAD_UP, MASK_DPAD_DOWN, MASK_DPAD_LEFT, MASK_DPAD_RIGHT, MASK_START, MASK_BACK, MASK_LS, MASK_RS,
+            MASK_LB, MASK_RB, MASK_A, MASK_B, MASK_X, MASK_Y,
+        };
         private static SDL.SDL_GameControllerAxis _ltAxis = SDL.SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_TRIGGERLEFT;
         private static SDL.SDL_GameControllerAxis _rtAxis = SDL.SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_TRIGGERRIGHT;
 
@@ -1033,7 +1049,11 @@ DebugLog = FALSE
                     }
                 }
                 // No controller: the keyboard + mouse pad is given to the game instead (KbmCore.cs).
-                if (_controller == IntPtr.Zero) return KeyboardMouse.PollWithoutController(pState);
+                if (_controller == IntPtr.Zero)
+                {
+                    KeyboardMouse.PublishPhysButtons(0);
+                    return KeyboardMouse.PollWithoutController(pState);
+                }
             }
 
             // One clock sample per poll, shared by every macro below.
@@ -1063,6 +1083,14 @@ DebugLog = FALSE
             }
 
             state.Gamepad.wButtons = buttons;
+
+            // For DSfix (shared block version 5): the real buttons, before [Bindings], macros and their suppression
+            ushort phys = 0;
+            for (int i = 0; i < _physButtons.Length; i++)
+                if (SDL.SDL_GameControllerGetButton(_controller, _physButtons[i]) == 1) phys |= _physMasks[i];
+            KeyboardMouse.PublishPhysButtons(phys);
+            // DSfix's map is open: no macro starts, a running auto-run stops (its sprint B would close the gesture window)
+            bool hostMap = KeyboardMouse.HostMapActive();
 
             // Read raw axis data
             short rawLT = SDL.SDL_GameControllerGetAxis(_controller, _ltAxis);
@@ -1100,9 +1128,10 @@ DebugLog = FALSE
             bool kickPressed = false, leapPressed = false, autoRunPressed = false;
             bool jumpPressed = false, dashSprintPressed = false, rollPressed = false;
 
+            if (hostMap) { _autoRunActive = false; _autoRunEngaged = false; }
             foreach (var macro in _macros)
             {
-                if (macro.IsPressed(_controller))
+                if (!hostMap && macro.IsPressed(_controller))
                 {
                     switch (macro.Action)
                     {

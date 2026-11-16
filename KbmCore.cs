@@ -384,6 +384,26 @@ namespace PlayStationPDTEinputFix
         // still-held ENTER answered the dialog at once.)
         private static readonly bool[] _keyWaitUp = new bool[256];
 
+        // DSfix's map pin boxes (shared block version 4): while its heartbeat is less than 250 ms old the game gets no key.
+        // Signed difference: a heartbeat written a moment "after" this thread read the clock counts as fresh too.
+        private static bool HostBlocksKeys()
+        {
+            uint t = Shared->HostBlockKeysTick;
+            if (t == 0) return false;
+            int age = unchecked(Environment.TickCount - (int)t);
+            return age > -1000 && age < 250;
+        }
+        // DSfix's map is open (shared block version 5): the macros wait (Proxy.cs)
+        internal static bool HostMapActive()
+        {
+            uint t = Shared->HostMapTick;
+            if (t == 0) return false;
+            int age = unchecked(Environment.TickCount - (int)t);
+            return age > -1000 && age < 250;
+        }
+        // the real controller's buttons, for DSfix (Proxy.cs, every poll)
+        internal static void PublishPhysButtons(uint buttons) { Shared->PhysButtons = buttons; }
+
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
         private static int HookGetDeviceState(IntPtr self, uint cb, byte* data)
         {
@@ -393,6 +413,14 @@ namespace PlayStationPDTEinputFix
             {
                 if (cb >= 256 && _gameKeyboards.Contains(self))
                 {
+                    // DSfix reads the keyboard for a map pin's text: the game gets no key. A key still held when that ends
+                    // reaches the game only after it was let go (the ENTER that confirmed the text must not do a gesture).
+                    if (HostBlocksKeys())
+                    {
+                        for (int k = 0; k < 256; k++) if ((data[k] & 0x80) != 0) _keyWaitUp[k] = true;
+                        new Span<byte>(data, 256).Clear();
+                        return hr;
+                    }
                     byte[] keep = (_phase == Phase.Menu || _phase == Phase.Loading) ? _keepMenuKeys
                                 : _phase == Phase.Aim ? _keepAimKeys : Array.Empty<byte>();
                     byte* saved = stackalloc byte[8];
@@ -1127,4 +1155,4 @@ namespace PlayStationPDTEinputFix
             catch { }
         }
     }
-}
+}

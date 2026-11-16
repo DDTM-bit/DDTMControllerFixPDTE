@@ -19,6 +19,16 @@
 //  DSfix may draw the cursor itself inside the game picture (same colours as the game,
 //  smooth edges). While DSfix does that (HostCursorTick fresh), the Windows cursor is
 //  hidden. Without DSfix, or with an older one, HostCursorTick stays 0 and nothing changes.
+//
+//  Version 4 adds DSfix's map pins: while the player types a pin's text on the real
+//  keyboard (one of DSfix's map pin boxes is open), DSfix keeps HostBlockKeysTick fresh and
+//  the game gets no keyboard key at all (ENTER would do the selected gesture, BACKSPACE
+//  would close the gesture window). Keys still held when it ends wait for their release.
+//  (The mouse buttons the game reads with GetKeyboardState; DSfix filters those itself.)
+//  Version 5 adds the real controller's buttons (PhysButtons: DSfix's map reads L3 even when
+//  a macro such as AUTO_RUN takes L3 from the game) and HostMapTick: while DSfix's map is open
+//  no macro starts and a running auto-run stops (its sprint B would close the gesture window).
+//  Without DSfix, or with an older one, the heartbeats stay 0 and nothing changes.
 // =====================================================================================
 using System;
 using System.Collections.Generic;
@@ -32,7 +42,7 @@ namespace PlayStationPDTEinputFix
     internal unsafe struct DdtmSharedState
     {
         public uint Magic;           // 0x4D544444 ("DDTM")
-        public int Version;          // 3 (2: no cursor fields, 1: no Pad[])
+        public int Version;          // 5 (4: no PhysButtons / HostMapTick, 3: no HostBlockKeysTick, 2: no cursor fields, 1: no Pad[])
         public int Ready;            // 1 once Cell[] is filled (the .ini is read at the first poll)
         public int KbmActive;        // 1 = keyboard / mouse used last, 0 = controller
         public int Phase;            // 0 = game (hint messages included), 1 = menu, 2 = quick menu or a menu opened from it
@@ -46,6 +56,14 @@ namespace PlayStationPDTEinputFix
         public int CursorVisible;    // written here: 1 = the mouse cursor should show now (menus, see KbmCursor.cs)
         public uint HostCursorTick;  // written by DSfix: GetTickCount() of its last frame that can draw the cursor (never 0);
                                      // while it is less than 250 ms old, DSfix draws the cursor and the Windows cursor is hidden
+        // Version 4: DSfix's map pins
+        public uint HostBlockKeysTick;   // written by DSfix: GetTickCount() while one of its map pin boxes is open (never 0;
+                                         // 0 = none); while it is less than 250 ms old the game gets no keyboard key
+        // Version 5
+        public uint PhysButtons;         // written here every poll: the real controller's buttons in XInput layout (before
+                                         // [Bindings], macros and their button suppression); 0 without a controller
+        public uint HostMapTick;         // written by DSfix: GetTickCount() while its map is open (never 0; 0 = none); while it
+                                         // is less than 250 ms old no macro starts and a running auto-run stops
     }
 
     public static unsafe class DdtmExports
@@ -63,7 +81,7 @@ namespace PlayStationPDTEinputFix
         {
             var s = (DdtmSharedState*)NativeMemory.AllocZeroed((nuint)sizeof(DdtmSharedState));
             s->Magic = 0x4D544444;
-            s->Version = 3;
+            s->Version = 5;
             for (int i = 0; i < 16; i++) s->Cell[i] = -1;
             for (int i = 0; i < 8; i++) s->Pad[i] = -1;
             return s;
