@@ -173,4 +173,4 @@ This program is free software: you can redistribute it and/or modify it under th
 
 This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the [LICENSE](LICENSE) file for details.
 
-DDTM Controller Fix is also shipped inside [DSfix 3.0](https://github.com/DDTM-bit/DSfix-3.0---Dark-Souls-PTDE), which uses the same license.
+DDTM Controller Fix is also shipped inside Nexus mod archive for [DSfix 3.0](https://www.nexusmods.com/darksouls/mods/1985), which uses the same license.
