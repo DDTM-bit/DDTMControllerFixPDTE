@@ -109,6 +109,7 @@ On first launch the mod creates **`DDTMControllerMappings.ini`** in the `DATA` f
 * **Button prompts that follow your controls** — your own keys from `[Keyboard]` while you play with keyboard & mouse, and the real button you mapped in `[Bindings]` while you use the controller. Set `DDTMControllerMappings 1` in `DSfix.ini`.
 * **True-colour menu cursor** drawn inside the game picture, so it looks the same on every PC and shows up in screenshots and recordings.
 * **Mouse-wheel scrolling** in item lists (inventory, Bottomless Box, equipment, shops, upgrades).
+* **Bonfire Map Pins:** you can write text for pins directly from keyboard with this DDTM controller fix. 
 
 Everything else in this mod works the same with the original DSfix 2.4 or without DSfix.
 
