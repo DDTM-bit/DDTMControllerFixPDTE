@@ -149,7 +149,8 @@ namespace PlayStationPDTEinputFix
 
             // In game: keep the hidden cursor near the middle, so it never leaves the window. It is only
             // moved back when it has gone more than a quarter of the window away (not every frame).
-            if (!menuShown && _focused)
+            // Not while the RTX Remix F4 menu has the mouse (RTX Remix compatibility, RtxRemix.cs).
+            if (!menuShown && _focused && !RtxMenuHasMouse())
             {
                 int* r = stackalloc int[4];
                 int* cur = stackalloc int[2];

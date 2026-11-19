@@ -315,13 +315,21 @@ namespace PlayStationPDTEinputFix
             return orig;
         }
 
+        // RTX Remix compatibility (ds1-rtx-remix-proxy, see RtxRemix.cs): that mod makes its own DirectInput objects
+        // (ANSI and wide) on its own threads, sometimes before the game, and releases them again. The game asks only for
+        // the wide one (IID_IDirectInput8W): only a wide object is used to patch the shared vtables, and our own mouse
+        // comes from an object of our own (_ownDi), never from another program's. Helps with any program that does the same.
+        private static readonly Guid IID_IDirectInput8W = new Guid("BF798031-483A-4DA2-AA99-5D64ED369700");
+        internal static bool IsDirectInputW(IntPtr riid) => riid != IntPtr.Zero && *(Guid*)riid == IID_IDirectInput8W;
+        private static IntPtr _ownDi;
+
         /// <summary>Called from Proxy.DirectInput8Create after the real DirectInput8Create.</summary>
-        public static void OnDirectInputCreated(int hr, IntPtr ppvOut)
+        public static void OnDirectInputCreated(int hr, IntPtr ppvOut, IntPtr riid)
         {
             try
             {
                 Init();
-                if (!_enabled || hr != 0 || ppvOut == IntPtr.Zero || _di != IntPtr.Zero) return;
+                if (!_enabled || hr != 0 || ppvOut == IntPtr.Zero || _di != IntPtr.Zero || !IsDirectInputW(riid)) return;
                 _di = *(IntPtr*)ppvOut;
                 _origCreateDevice = PatchSlot(*(IntPtr*)_di, 3, (IntPtr)(delegate* unmanaged[Stdcall]<IntPtr, Guid*, IntPtr*, IntPtr, int>)&HookCreateDevice);
             }
@@ -464,10 +472,20 @@ namespace PlayStationPDTEinputFix
             if (_ownMouseFailed) return false;
             if (_ownMouse == IntPtr.Zero)
             {
-                if (_di == IntPtr.Zero || _mouseFormat == IntPtr.Zero || _hwnd == IntPtr.Zero || _devVtable == IntPtr.Zero) return false;
+                if (_di == IntPtr.Zero || _mouseFormat == IntPtr.Zero || _hwnd == IntPtr.Zero || _devVtable == IntPtr.Zero || Proxy.RealDirectInput8Create == IntPtr.Zero) return false;
+                // our own DirectInput object (kept for the whole game), straight from the real DirectInput8Create
+                // (RTX Remix compatibility, see above: another program's object can be released under us)
+                if (_ownDi == IntPtr.Zero)
+                {
+                    Guid iid = IID_IDirectInput8W;
+                    IntPtr obj;
+                    int hrc = ((delegate* unmanaged[Stdcall]<IntPtr, uint, Guid*, IntPtr*, IntPtr, int>)Proxy.RealDirectInput8Create)(GetModuleHandleW(IntPtr.Zero), 0x0800, &iid, &obj, IntPtr.Zero);
+                    if (hrc != 0 || obj == IntPtr.Zero) { _ownMouseFailed = true; return false; }
+                    _ownDi = obj;
+                }
                 Guid g = GUID_SysMouse;
                 IntPtr dev;
-                int hr = ((delegate* unmanaged[Stdcall]<IntPtr, Guid*, IntPtr*, IntPtr, int>)_origCreateDevice)(_di, &g, &dev, IntPtr.Zero);
+                int hr = ((delegate* unmanaged[Stdcall]<IntPtr, Guid*, IntPtr*, IntPtr, int>)_origCreateDevice)(_ownDi, &g, &dev, IntPtr.Zero);
                 if (hr != 0 || dev == IntPtr.Zero) { _ownMouseFailed = true; Log($"own mouse: CreateDevice failed hr=0x{hr:X8}, mouse OFF"); return false; }
                 _gameMice.Remove(dev); _gameKeyboards.Remove(dev);
                 IntPtr vt = *(IntPtr*)dev;

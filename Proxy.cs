@@ -193,6 +193,12 @@ namespace PlayStationPDTEinputFix
         public delegate int EnumDevicesDelegate(IntPtr pThis, uint dwDevType, IntPtr lpCallback, IntPtr pvRef, uint dwFlags);
 
         private static HookEngine? _hookEngine;
+        // RTX Remix compatibility (ds1-rtx-remix-proxy, see RtxRemix.cs): that mod calls DirectInput8Create on its own
+        // threads at the same time as the game. One call at a time here, or the XInput hooks were created twice
+        // (crash: "An item with the same key has already been added"). Helps with any program that does the same.
+        private static readonly object _diCreateLock = new object();
+        // the real DirectInput8Create (KbmCore.cs makes its own object for its mouse with it)
+        internal static IntPtr RealDirectInput8Create;
         private static IntPtr _controller = IntPtr.Zero;
         private static EnumDevicesDelegate? _detourEnumDevices;
         private static EnumDevicesDelegate? _originalEnumDevices;
@@ -946,6 +952,11 @@ DebugLog = FALSE
         [UnmanagedCallersOnly(EntryPoint = "DirectInput8Create", CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvStdcall) })]
         public static int DirectInput8Create(IntPtr hinst, uint dwVersion, IntPtr riidltf, IntPtr ppvOut, IntPtr punkOuter)
         {
+            lock (_diCreateLock) return DirectInput8CreateLocked(hinst, dwVersion, riidltf, ppvOut, punkOuter);
+        }
+
+        private static int DirectInput8CreateLocked(IntPtr hinst, uint dwVersion, IntPtr riidltf, IntPtr ppvOut, IntPtr punkOuter)
+        {
             if (_hookEngine == null)
             {
                 SDL.SDL_SetHint("SDL_JOYSTICK_THREAD", "1");
@@ -973,6 +984,7 @@ DebugLog = FALSE
 
             IntPtr realDinput = NativeLibrary.Load("C:\\Windows\\SysWOW64\\dinput8.dll");
             IntPtr realCreate = NativeLibrary.GetExport(realDinput, "DirectInput8Create");
+            RealDirectInput8Create = realCreate;
 
             int hr;
             unsafe
@@ -980,7 +992,9 @@ DebugLog = FALSE
                 hr = ((delegate* unmanaged[Stdcall]<IntPtr, uint, IntPtr, IntPtr, IntPtr, int>)realCreate)(hinst, dwVersion, riidltf, ppvOut, punkOuter);
             }
 
-            if (hr == 0 && ppvOut != IntPtr.Zero && _originalEnumDevices == null)
+            // Only in a wide object, the game's kind. RTX Remix compatibility: that mod also makes an ANSI object
+            // (other functions), and another program's object could come first.
+            if (hr == 0 && ppvOut != IntPtr.Zero && _originalEnumDevices == null && KeyboardMouse.IsDirectInputW(riidltf))
             {
                 unsafe
                 {
@@ -996,7 +1010,7 @@ DebugLog = FALSE
                     VirtualProtect(enumDevicesAddr, (UIntPtr)IntPtr.Size, oldProtect, out _);
                 }
             }
-            KeyboardMouse.OnDirectInputCreated(hr, ppvOut); // keyboard + mouse (KbmCore.cs)
+            KeyboardMouse.OnDirectInputCreated(hr, ppvOut, riidltf); // keyboard + mouse (KbmCore.cs)
             return hr;
         }
 
